@@ -20,6 +20,7 @@ from .plots import (
     plot_sparsification_effect,
     plot_calibration_curve,
     plot_degree_distribution,
+    plot_experiment_5_results,
     save_figure,
 )
 from .tables import (
@@ -37,6 +38,7 @@ __all__ = [
     "plot_sparsification_effect",
     "plot_calibration_curve",
     "plot_degree_distribution",
+    "plot_experiment_5_results",
     "save_figure",
     # Tables
     "create_summary_table",

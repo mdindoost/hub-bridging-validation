@@ -534,3 +534,144 @@ def comprehensive_network_properties(
             properties["hub_bridging"] = {"rho_hb": np.nan, "delta_dspar": np.nan}
 
     return properties
+
+
+def comprehensive_network_properties_flat(
+    G: nx.Graph,
+    communities: Optional[Union[Dict[int, int], List[set]]] = None,
+    network_name: str = "unknown",
+) -> Dict[str, Any]:
+    """
+    Compute comprehensive network properties in a flat dictionary format.
+
+    This is useful for direct property comparison between networks.
+
+    Parameters
+    ----------
+    G : nx.Graph
+        Input graph
+    communities : dict or list of sets, optional
+        Community assignments
+    network_name : str
+        Name identifier for the network
+
+    Returns
+    -------
+    Dict[str, Any]
+        Flat dictionary with all properties
+    """
+    props = {'name': network_name}
+
+    # Basic properties
+    props['n'] = G.number_of_nodes()
+    props['m'] = G.number_of_edges()
+    props['density'] = nx.density(G)
+
+    # Degree statistics
+    degrees = [d for _, d in G.degree()]
+    props['degree_mean'] = np.mean(degrees) if degrees else 0
+    props['degree_std'] = np.std(degrees) if degrees else 0
+    props['degree_max'] = max(degrees) if degrees else 0
+    props['degree_min'] = min(degrees) if degrees else 0
+
+    # Power law fit
+    try:
+        import powerlaw
+        fit = powerlaw.Fit(degrees, discrete=True, verbose=False)
+        props['power_law_alpha'] = float(fit.power_law.alpha)
+        props['power_law_xmin'] = float(fit.power_law.xmin)
+    except Exception:
+        props['power_law_alpha'] = np.nan
+        props['power_law_xmin'] = np.nan
+
+    # Assortativity
+    try:
+        props['degree_assortativity'] = float(nx.degree_assortativity_coefficient(G))
+    except Exception:
+        props['degree_assortativity'] = np.nan
+
+    # Clustering
+    try:
+        props['clustering_avg'] = float(nx.average_clustering(G))
+        props['transitivity'] = float(nx.transitivity(G))
+    except Exception:
+        props['clustering_avg'] = np.nan
+        props['transitivity'] = np.nan
+
+    # Distance properties (on largest component)
+    if nx.is_connected(G):
+        Gcc = G
+    else:
+        Gcc = G.subgraph(max(nx.connected_components(G), key=len)).copy()
+
+    try:
+        # Sample-based for large networks
+        if Gcc.number_of_nodes() > 500:
+            nodes = list(Gcc.nodes())
+            sampled = np.random.choice(nodes, size=min(100, len(nodes)), replace=False)
+            lengths = []
+            for source in sampled:
+                path_lengths = nx.single_source_shortest_path_length(Gcc, source)
+                lengths.extend(path_lengths.values())
+            props['avg_path_length'] = float(np.mean(lengths))
+        else:
+            props['avg_path_length'] = float(nx.average_shortest_path_length(Gcc))
+    except Exception:
+        props['avg_path_length'] = np.nan
+
+    try:
+        if Gcc.number_of_nodes() <= 500:
+            props['diameter'] = int(nx.diameter(Gcc))
+        else:
+            props['diameter'] = np.nan
+    except Exception:
+        props['diameter'] = np.nan
+
+    # Community structure
+    if communities is not None:
+        # Convert to list of sets if dict
+        if isinstance(communities, dict):
+            comm_dict: Dict[int, set] = {}
+            for node, comm_id in communities.items():
+                if comm_id not in comm_dict:
+                    comm_dict[comm_id] = set()
+                comm_dict[comm_id].add(node)
+            community_list = list(comm_dict.values())
+        else:
+            community_list = communities
+
+        try:
+            props['modularity'] = float(nx.community.modularity(G, community_list))
+            props['num_communities'] = len(community_list)
+        except Exception:
+            props['modularity'] = np.nan
+            props['num_communities'] = np.nan
+
+        # Hub-bridging metrics
+        try:
+            from .hub_bridging import compute_hub_bridging_ratio, compute_dspar_separation
+            props['rho_HB'] = float(compute_hub_bridging_ratio(G, communities))
+            props['delta_DSpar'] = float(compute_dspar_separation(G, communities))
+        except Exception:
+            props['rho_HB'] = np.nan
+            props['delta_DSpar'] = np.nan
+    else:
+        props['modularity'] = np.nan
+        props['num_communities'] = np.nan
+        props['rho_HB'] = np.nan
+        props['delta_DSpar'] = np.nan
+
+    # Rich club coefficient (at degree k=10 or 10th percentile)
+    try:
+        rc = nx.rich_club_coefficient(G, normalized=False)
+        k_10 = int(np.percentile(degrees, 90))  # Top 10% degree threshold
+        if k_10 in rc:
+            props['rich_club_10'] = float(rc[k_10])
+        elif 10 in rc:
+            props['rich_club_10'] = float(rc[10])
+        else:
+            props['rich_club_10'] = np.nan
+    except Exception:
+        props['rich_club_10'] = np.nan
+
+    return props

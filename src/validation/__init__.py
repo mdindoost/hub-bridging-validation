@@ -24,7 +24,14 @@ from .structural import (
 )
 from .realism import (
     experiment_5_property_matching,
+    experiment_5_real_network_matching,
+    experiment_5_extended,
     experiment_6_fitting,
+    summarize_experiment_5,
+    summarize_experiment_5_extended,
+    PRIORITY_PROPERTIES,
+    PROPERTY_WEIGHTS,
+    RHO_REGIMES,
 )
 from .algorithmic import (
     experiment_7_community_detection,
@@ -46,7 +53,14 @@ __all__ = [
     "experiment_4_concentration",
     # Realism validation
     "experiment_5_property_matching",
+    "experiment_5_real_network_matching",
+    "experiment_5_extended",
     "experiment_6_fitting",
+    "summarize_experiment_5",
+    "summarize_experiment_5_extended",
+    "PRIORITY_PROPERTIES",
+    "PROPERTY_WEIGHTS",
+    "RHO_REGIMES",
     # Algorithmic validation
     "experiment_7_community_detection",
     "experiment_8_sparsification",

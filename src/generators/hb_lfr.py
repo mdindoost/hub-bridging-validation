@@ -237,6 +237,8 @@ def _rewire_for_hub_bridging(
     stall_count = 0
     best_rho = rho_current
     best_diff = abs(rho_current - rho_target)
+    no_improvement_count = 0  # Track iterations without improvement
+    last_check_diff = best_diff
 
     for iteration in range(max_iters):
         # Perform rewiring step
@@ -257,6 +259,9 @@ def _rewire_for_hub_bridging(
                 if diff < best_diff:
                     best_diff = diff
                     best_rho = rho_current
+                    no_improvement_count = 0
+                else:
+                    no_improvement_count += 1
 
                 # Check convergence
                 if diff < tolerance:
@@ -266,8 +271,26 @@ def _rewire_for_hub_bridging(
                     )
                     break
 
-                # Log progress
-                if successful_rewires % 500 == 0:
+                # EARLY TERMINATION: No improvement for 5 consecutive checks
+                if no_improvement_count >= 5:
+                    logger.warning(
+                        f"Early stop at iteration {iteration}: no improvement "
+                        f"(best ρ={best_rho:.3f}, target={rho_target:.3f})"
+                    )
+                    break
+
+                # EARLY TERMINATION: Target clearly unreachable (diff > 0.3 after 1000 iters)
+                if iteration > 1000 and diff > 0.3 and diff >= last_check_diff * 0.98:
+                    logger.warning(
+                        f"Early stop at iteration {iteration}: target unreachable "
+                        f"(ρ={rho_current:.3f}, target={rho_target:.3f})"
+                    )
+                    break
+
+                last_check_diff = diff
+
+                # Log progress (less frequently)
+                if successful_rewires % 1000 == 0:
                     logger.info(
                         f"Iteration {iteration}: ρ={rho_current:.3f} "
                         f"(target={rho_target:.3f}, diff={diff:.4f})"
@@ -275,8 +298,8 @@ def _rewire_for_hub_bridging(
         else:
             stall_count += 1
 
-            # Check for stagnation
-            if stall_count > 200:
+            # Check for stagnation (reduced from 200 to 100)
+            if stall_count > 100:
                 rho_current = compute_hub_bridging_ratio(G, communities_dict)
                 logger.warning(
                     f"Rewiring stalled at iteration {iteration}: ρ={rho_current:.3f}"

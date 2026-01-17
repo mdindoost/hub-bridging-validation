@@ -776,6 +776,217 @@ def plot_degree_preservation_summary_table(
     return fig
 
 
+def plot_experiment_5_results(
+    results: Dict[str, Any],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (18, 10),
+) -> plt.Figure:
+    """
+    Visualize Experiment 5: Real Network Property Matching results.
+
+    Creates multi-panel figure:
+    - Panel A: Property distance comparison (Real, HB-LFR, Standard LFR)
+    - Panel B: Fitted h values per network
+    - Panel C: ρ_HB comparison (Real vs Fitted HB-LFR)
+    - Panel D: Key properties comparison radar chart
+
+    Parameters
+    ----------
+    results : Dict[str, Any]
+        Results from experiment_5_real_network_matching()
+    save_path : str, optional
+        Path to save figure
+    figsize : Tuple[int, int], optional
+        Figure size
+
+    Returns
+    -------
+    plt.Figure
+        Matplotlib figure object
+    """
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+    # Results are keyed by network name directly (not under "networks")
+    # Filter out non-network keys like "summary", "metadata"
+    network_names = [k for k in results.keys() if k not in ("summary", "metadata") and isinstance(results[k], dict)]
+    if not network_names:
+        logger.warning("No network results found")
+        return fig
+
+    n_networks = len(network_names)
+    colors = plt.cm.Set2(np.linspace(0, 1, max(n_networks, 3)))
+
+    # Panel A: Property Distance Comparison (Bar chart)
+    ax = axes[0, 0]
+
+    x = np.arange(n_networks)
+    width = 0.25
+
+    hb_distances = []
+    lfr_distances = []
+    improvements = []
+
+    for name in network_names:
+        net_res = results[name]
+        hb_dist = net_res.get("overall_distance_hb", np.nan)
+        lfr_dist = net_res.get("overall_distance_std", np.nan)
+        hb_distances.append(hb_dist)
+        lfr_distances.append(lfr_dist)
+        if not np.isnan(hb_dist) and not np.isnan(lfr_dist) and lfr_dist > 0:
+            improvements.append((lfr_dist - hb_dist) / lfr_dist * 100)
+        else:
+            imp = net_res.get("overall_improvement", 0)
+            improvements.append(imp * 100 if not np.isnan(imp) else 0)
+
+    bars1 = ax.bar(x - width/2, hb_distances, width, label='HB-LFR (fitted)',
+                   color='#2E86AB', alpha=0.8)
+    bars2 = ax.bar(x + width/2, lfr_distances, width, label='Standard LFR',
+                   color='#A23B72', alpha=0.8)
+
+    ax.set_xlabel('Network', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Property Distance to Real', fontsize=12, fontweight='bold')
+    ax.set_title('Panel A: Property Matching Quality\n(Lower is Better)',
+                fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(network_names, rotation=45, ha='right')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # Add improvement percentage annotations
+    for i, (hb, lfr, imp) in enumerate(zip(hb_distances, lfr_distances, improvements)):
+        if imp > 0:
+            ax.annotate(f'+{imp:.0f}%', xy=(i, max(hb, lfr)),
+                       xytext=(0, 5), textcoords='offset points',
+                       ha='center', fontsize=9, color='green', fontweight='bold')
+
+    # Panel B: Fitted h values
+    ax = axes[0, 1]
+
+    fitted_h = []
+    target_rho = []
+    achieved_rho = []
+
+    for name in network_names:
+        net_res = results[name]
+        fitted_h.append(net_res.get("h_fitted", np.nan))
+        # Get target rho from fit_result or real_properties
+        fit_result = net_res.get("fit_result", {})
+        real_props = net_res.get("real_properties", {})
+        target_rho.append(fit_result.get("rho_target", real_props.get("rho_HB", np.nan)))
+        achieved_rho.append(fit_result.get("rho_achieved", np.nan))
+
+    bars = ax.bar(network_names, fitted_h, color=colors[:n_networks], alpha=0.8)
+
+    ax.set_xlabel('Network', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Fitted h Parameter', fontsize=12, fontweight='bold')
+    ax.set_title('Panel B: Optimal h Values\n(Higher h → More Hub-Bridging)',
+                fontsize=14, fontweight='bold')
+    ax.set_xticklabels(network_names, rotation=45, ha='right')
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # Add value labels on bars
+    for bar, h in zip(bars, fitted_h):
+        if not np.isnan(h):
+            ax.annotate(f'{h:.2f}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
+                       xytext=(0, 3), textcoords='offset points',
+                       ha='center', fontsize=10, fontweight='bold')
+
+    # Panel C: ρ_HB Comparison
+    ax = axes[1, 0]
+
+    x = np.arange(n_networks)
+    width = 0.35
+
+    bars1 = ax.bar(x - width/2, target_rho, width, label='Real Network',
+                   color='#27AE60', alpha=0.8)
+    bars2 = ax.bar(x + width/2, achieved_rho, width, label='HB-LFR (fitted)',
+                   color='#2E86AB', alpha=0.8)
+
+    ax.set_xlabel('Network', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Hub-Bridging Ratio ρ_HB', fontsize=12, fontweight='bold')
+    ax.set_title('Panel C: ρ_HB Target vs Achieved\n(Should Match)',
+                fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(network_names, rotation=45, ha='right')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3, axis='y')
+
+    # Add error annotations
+    for i, (t, a) in enumerate(zip(target_rho, achieved_rho)):
+        if not np.isnan(t) and not np.isnan(a):
+            error = abs(a - t)
+            ax.annotate(f'Δ={error:.3f}', xy=(i, max(t, a)),
+                       xytext=(0, 5), textcoords='offset points',
+                       ha='center', fontsize=8, color='gray')
+
+    # Panel D: Summary Statistics
+    ax = axes[1, 1]
+    ax.axis('off')
+
+    summary = results.get("summary", {})
+
+    # Create summary text
+    summary_text = "EXPERIMENT 5 SUMMARY\n"
+    summary_text += "=" * 40 + "\n\n"
+
+    summary_text += f"Networks tested: {summary.get('n_networks', 'N/A')}\n\n"
+
+    # Statistical test results
+    stat_test = summary.get("statistical_test", {})
+    if stat_test:
+        summary_text += "Mann-Whitney U Test (HB-LFR vs Standard LFR):\n"
+        summary_text += f"  U-statistic: {stat_test.get('U_statistic', np.nan):.2f}\n"
+        summary_text += f"  p-value: {stat_test.get('p_value', np.nan):.4f}\n"
+        summary_text += f"  Effect size: {stat_test.get('effect_size', np.nan):.3f}\n\n"
+
+    # Average improvement
+    avg_improvement = summary.get("avg_improvement_percent", np.nan)
+    if not np.isnan(avg_improvement):
+        summary_text += f"Average improvement: {avg_improvement:.1f}%\n"
+        summary_text += f"Networks where HB-LFR wins: {summary.get('hb_wins', 0)}/{summary.get('n_networks', 0)}\n\n"
+
+    # Validation status
+    passes = summary.get("passes", False)
+    status = "✓ PASS" if passes else "✗ FAIL"
+    color = "green" if passes else "red"
+    summary_text += f"\nVALIDATION: {status}\n"
+
+    ax.text(0.1, 0.9, summary_text, transform=ax.transAxes,
+           fontsize=11, verticalalignment='top', fontfamily='monospace',
+           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    # Add interpretation
+    interpretation = (
+        "Interpretation:\n"
+        "• HB-LFR with fitted h should produce smaller property\n"
+        "  distances than standard LFR (h=0)\n"
+        "• Significant p-value (<0.05) indicates HB-LFR\n"
+        "  systematically outperforms standard LFR\n"
+        "• This validates that real networks exhibit\n"
+        "  hub-bridging structure that h can capture"
+    )
+    ax.text(0.1, 0.25, interpretation, transform=ax.transAxes,
+           fontsize=10, verticalalignment='top', style='italic',
+           bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.3))
+
+    plt.suptitle('Experiment 5: Real Network Property Matching\n'
+                'Validating HB-LFR Realism with Fitted h Parameter',
+                fontsize=16, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+        logger.info(f"Figure saved to: {save_path}")
+
+        # Also save PDF
+        pdf_path = save_path.replace('.png', '.pdf')
+        if pdf_path != save_path:
+            fig.savefig(pdf_path, dpi=300, bbox_inches='tight', facecolor='white')
+            logger.info(f"PDF saved to: {pdf_path}")
+
+    return fig
+
+
 def plot_modularity_independence(
     results: Dict[str, Any],
     save_path: Optional[str] = None,

@@ -31,6 +31,9 @@ from .calibration import (
     calibrate_h_to_rho,
     get_calibration_curve,
     h_for_target_rho,
+    extract_lfr_params_from_real,
+    fit_h_to_real_network,
+    fit_h_to_real_network_extended,
 )
 
 __all__ = [
@@ -48,4 +51,7 @@ __all__ = [
     "calibrate_h_to_rho",
     "get_calibration_curve",
     "h_for_target_rho",
+    "extract_lfr_params_from_real",
+    "fit_h_to_real_network",
+    "fit_h_to_real_network_extended",
 ]
