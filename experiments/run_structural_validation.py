@@ -34,8 +34,10 @@ from src.generators.hb_sbm import hb_sbm
 from src.validation.structural import (
     experiment_1_parameter_control,
     experiment_2_degree_preservation,
+    experiment_2_degree_preservation_full,
     experiment_3_modularity_independence,
     experiment_4_concentration,
+    experiment_4_modularity_independence,
 )
 
 # Optional visualization imports
@@ -746,12 +748,592 @@ def experiment_1_compare_generators(
     }
 
 
+def run_experiment_3_concentration(
+    generators=None,
+    h_fixed=1.0,
+    n_samples=100,
+    n=500,
+    seed=42,
+):
+    """
+    Run Experiment 3: Concentration and Reproducibility.
+
+    Tests that hub-bridging ratio has low variance across multiple runs,
+    validating that the algorithm is reliable and reproducible.
+
+    Parameters
+    ----------
+    generators : list, optional
+        Generators to test (default: ['hb_sbm', 'hb_lfr'])
+    h_fixed : float
+        Fixed h value to test (default: 1.0)
+    n_samples : int
+        Number of independent networks to generate (default: 100)
+    n : int
+        Network size
+    seed : int
+        Random seed
+
+    Returns
+    -------
+    dict
+        Experiment results with CV and statistics
+    """
+    from scipy.stats import shapiro, normaltest
+    from src.generators.hb_sbm import hb_sbm
+    from src.generators.hb_lfr import hb_lfr
+    from src.metrics.hub_bridging import compute_hub_bridging_ratio
+
+    if generators is None:
+        generators = ['hb_sbm', 'hb_lfr']
+
+    print("=" * 70)
+    print("EXPERIMENT 3: Concentration and Reproducibility")
+    print("=" * 70)
+    print(f"Fixed h = {h_fixed}")
+    print(f"Samples: {n_samples}")
+    print(f"Network size: n = {n}")
+    print(f"Generators: {generators}")
+    print()
+
+    rng = np.random.default_rng(seed)
+    results = {}
+
+    for gen_name in generators:
+        print(f"\n--- Testing {gen_name.upper()} ---")
+
+        rho_samples = []
+
+        for i in range(n_samples):
+            sample_seed = int(rng.integers(0, 2**31))
+
+            try:
+                if gen_name == 'hb_sbm':
+                    G, communities = hb_sbm(
+                        n=n, k=5, h=h_fixed, seed=sample_seed,
+                        p_in=0.3, p_out=0.05,
+                        theta_distribution='power_law',
+                        degree_correction_scale=1.5
+                    )
+                elif gen_name == 'hb_lfr':
+                    G, communities = hb_lfr(
+                        n=n, mu=0.3, h=h_fixed, seed=sample_seed,
+                        max_iters=5000
+                    )
+                else:
+                    raise ValueError(f"Unknown generator: {gen_name}")
+
+                rho = compute_hub_bridging_ratio(G, communities)
+                rho_samples.append(rho)
+
+                if (i + 1) % 20 == 0:
+                    current_mean = np.mean(rho_samples)
+                    current_std = np.std(rho_samples)
+                    current_cv = (current_std / current_mean) * 100
+                    print(f"  Sample {i+1}/{n_samples}: ρ = {current_mean:.3f} ± {current_std:.3f} (CV = {current_cv:.2f}%)")
+
+            except Exception as e:
+                print(f"  Sample {i+1} failed: {e}")
+
+        # Compute statistics
+        rho_array = np.array(rho_samples)
+        mean_rho = np.mean(rho_array)
+        std_rho = np.std(rho_array)
+        cv = (std_rho / mean_rho) * 100
+        ci_95 = 1.96 * std_rho / np.sqrt(len(rho_array))
+
+        # Normality tests
+        if len(rho_array) >= 20:
+            shapiro_stat, shapiro_p = shapiro(rho_array[:50])  # Shapiro limited to 50
+            _, dagostino_p = normaltest(rho_array)
+        else:
+            shapiro_p = dagostino_p = np.nan
+
+        # Store results
+        results[gen_name] = {
+            'h': h_fixed,
+            'n_samples': len(rho_samples),
+            'rho_samples': rho_samples,
+            'mean': mean_rho,
+            'std': std_rho,
+            'cv': cv,
+            'ci_95': ci_95,
+            'min': np.min(rho_array),
+            'max': np.max(rho_array),
+            'range': np.max(rho_array) - np.min(rho_array),
+            'shapiro_p': shapiro_p,
+            'dagostino_p': dagostino_p,
+            'passes': cv < 15.0,  # Threshold: CV < 15%
+        }
+
+        print(f"\n  Results for {gen_name.upper()}:")
+        print(f"    Mean ρ_HB: {mean_rho:.4f}")
+        print(f"    Std ρ_HB:  {std_rho:.4f}")
+        print(f"    CV:        {cv:.2f}%")
+        print(f"    95% CI:    ±{ci_95:.4f}")
+        print(f"    Range:     [{results[gen_name]['min']:.3f}, {results[gen_name]['max']:.3f}]")
+        print(f"    Normality: Shapiro p={shapiro_p:.4f}, D'Agostino p={dagostino_p:.4f}")
+
+    # Print summary
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 3 SUMMARY")
+    print("=" * 70)
+    print(f"\n{'Generator':<12} | {'Mean ρ':>10} | {'Std':>8} | {'CV (%)':>8} | {'Status':>10}")
+    print("-" * 56)
+
+    for gen_name in generators:
+        r = results[gen_name]
+        status = "✓ PASS" if r['passes'] else "✗ FAIL"
+        print(f"{gen_name.upper():<12} | {r['mean']:>10.4f} | {r['std']:>8.4f} | {r['cv']:>8.2f} | {status:>10}")
+
+    print()
+    print("Pass criteria: CV < 15%")
+    print("Expected: HB-LFR CV < 5% (deterministic), HB-SBM CV < 10% (stochastic)")
+
+    return results
+
+
+def run_experiment_2_full(
+    generators=None,
+    h_values=None,
+    n_samples=15,
+    n=500,
+    target_tau1=2.5,
+    seed=42,
+):
+    """
+    Run Experiment 2: Degree Distribution Preservation (Full version).
+
+    This validates that hub-bridging control is independent of degree structure
+    by showing τ remains constant across h values.
+
+    Parameters
+    ----------
+    generators : list, optional
+        Generators to test (default: ['hb_sbm', 'hb_lfr'])
+    h_values : list, optional
+        h values to test (default: [0.0, 0.5, 1.0, 1.5, 2.0])
+    n_samples : int
+        Samples per (generator, h) combination
+    n : int
+        Network size
+    target_tau1 : float
+        Target power-law exponent
+    seed : int
+        Random seed
+
+    Returns
+    -------
+    dict
+        Experiment results
+    """
+    if generators is None:
+        generators = ['hb_sbm', 'hb_lfr']
+    if h_values is None:
+        h_values = [0.0, 0.5, 1.0, 1.5, 2.0]
+
+    print("=" * 70)
+    print("EXPERIMENT 2: Degree Distribution Preservation")
+    print("=" * 70)
+    print(f"Generators: {generators}")
+    print(f"h values: {h_values}")
+    print(f"Samples per h: {n_samples}")
+    print(f"Network size: n={n}")
+    print(f"Target τ: {target_tau1}")
+    print()
+
+    # Run the comprehensive experiment
+    results = experiment_2_degree_preservation_full(
+        generators=generators,
+        h_values=h_values,
+        n_samples=n_samples,
+        n=n,
+        target_tau1=target_tau1,
+        seed=seed,
+    )
+
+    # Print summary
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 2 SUMMARY")
+    print("=" * 70)
+
+    for gen_name in generators:
+        if gen_name in results:
+            stats = results[gen_name].get('statistics', {})
+            print(f"\n{gen_name.upper()}:")
+            print(f"  Overall τ: {stats.get('tau_overall_mean', np.nan):.3f} ± "
+                  f"{stats.get('tau_overall_std', np.nan):.3f}")
+            print(f"  Target τ: {target_tau1}")
+            print(f"  ANOVA p (τ independent of h): {stats.get('anova_p', np.nan):.4f}")
+            print(f"  τ independent of h: {stats.get('independent', False)}")
+            print(f"  Close to target: {stats.get('close_to_target', False)}")
+            print(f"  VALIDATION: {'PASS ✓' if stats.get('passes', False) else 'FAIL ✗'}")
+
+    return results
+
+
+def run_experiment_4_modularity(
+    generators=None,
+    h_values=None,
+    n_samples=30,
+    n=500,
+    seed=42,
+):
+    """
+    Run Experiment 4: Modularity Independence Test.
+
+    Validates Theorem 4(a): For fixed constraints (degree sequence,
+    community structure, |E_inter|), modularity Q is independent of
+    hub-bridging ratio ρ_HB.
+
+    Parameters
+    ----------
+    generators : list, optional
+        Generators to test (default: ['hb_lfr'])
+    h_values : list, optional
+        h values to test (default: [0.0, 0.5, 1.0, 1.5, 2.0])
+    n_samples : int
+        Samples per h value
+    n : int
+        Network size
+    seed : int
+        Random seed
+
+    Returns
+    -------
+    dict
+        Experiment results
+    """
+    if generators is None:
+        generators = ['hb_lfr']
+    if h_values is None:
+        h_values = [0.0, 0.5, 1.0, 1.5, 2.0]
+
+    print("=" * 70)
+    print("EXPERIMENT 4: Modularity Independence Test")
+    print("=" * 70)
+    print("Validating Theorem 4(a): Q independent of ρ_HB for fixed constraints")
+    print(f"Generators: {generators}")
+    print(f"h values: {h_values}")
+    print(f"Samples per h: {n_samples}")
+    print(f"Network size: n={n}")
+    print()
+
+    # Run the experiment
+    results = experiment_4_modularity_independence(
+        generators=generators,
+        h_values=h_values,
+        n_samples=n_samples,
+        n=n,
+        seed=seed,
+    )
+
+    # Print summary
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 4 RESULTS")
+    print("=" * 70)
+
+    for gen_name in generators:
+        if gen_name in results:
+            s = results[gen_name]['statistics']
+            a = results[gen_name]['assessment']
+            print(f"\n{gen_name.upper()}:")
+            print(f"  Pearson r(ρ_HB, Q):   {s['pearson_r']:+.4f}")
+            print(f"  Spearman r(ρ_HB, Q):  {s['spearman_r']:+.4f}")
+            print(f"  ANOVA p-value:        {s['anova_p']:.4f}")
+            print(f"  Q range across h:     {s['Q_range']:.4f}")
+            print(f"  Relative range:       {s['relative_range']:.1%}")
+            print(f"  Degree preserved:     {s['degree_preserved']}")
+            print(f"  Passes correlation:   {a['passes_correlation']}")
+            print(f"  Passes independence:  {a['passes_anova']}")
+            print(f"  VALIDATION: {'PASS ✓' if a['passes_overall'] else 'FAIL ✗'}")
+
+    print("\n" + "=" * 70)
+    print("INTERPRETATION")
+    print("=" * 70)
+    print("If |r| < 0.2: Strong evidence for Theorem 4(a) - Q independent of ρ_HB")
+    print("If |r| < 0.3: Moderate evidence, acceptable")
+    print("If |r| > 0.3: Some dependency detected (investigate)")
+    print()
+    print("Note: A SMALL negative correlation is theoretically expected from")
+    print("Theorem 4(b) - higher ρ_HB slightly constrains maximum Q.")
+    print("But for fixed constraints (Theorem 4a), should be ~0.")
+
+    return results
+
+
 if __name__ == "__main__":
     import sys
 
     # Check command line arguments
     if len(sys.argv) > 1:
-        if sys.argv[1] == "--improved":
+        if sys.argv[1] == "--exp2":
+            # Run Experiment 2: Degree Preservation
+            n_samples = 15
+            if len(sys.argv) > 2:
+                n_samples = int(sys.argv[2])
+
+            results = run_experiment_2_full(
+                generators=['hb_sbm', 'hb_lfr'],
+                n_samples=n_samples,
+                n=500,
+                seed=42,
+            )
+
+            # Save results
+            import pickle
+            output_dir = Path("data/results")
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            with open(output_dir / 'experiment_2_results.pkl', 'wb') as f:
+                pickle.dump(results, f)
+
+            print(f"\nResults saved to: {output_dir / 'experiment_2_results.pkl'}")
+
+            # Generate visualization
+            try:
+                from src.visualization.plots import plot_degree_preservation_comparison
+                import matplotlib
+                matplotlib.use('Agg')  # Non-interactive backend
+                import matplotlib.pyplot as plt
+
+                fig = plot_degree_preservation_comparison(
+                    results,
+                    save_path=str(output_dir / 'figure_degree_preservation.png')
+                )
+                plt.close(fig)
+                print(f"Figure saved to: {output_dir / 'figure_degree_preservation.png'}")
+            except Exception as e:
+                print(f"Warning: Could not generate visualization: {e}")
+
+        elif sys.argv[1] == "--exp3":
+            # Run Experiment 3: Concentration
+            n_samples = 100
+            if len(sys.argv) > 2:
+                n_samples = int(sys.argv[2])
+
+            results = run_experiment_3_concentration(
+                generators=['hb_sbm', 'hb_lfr'],
+                h_fixed=1.0,
+                n_samples=n_samples,
+                n=500,
+                seed=42,
+            )
+
+            # Save results
+            import pickle
+            output_dir = Path("data/results")
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            with open(output_dir / 'experiment_3_results.pkl', 'wb') as f:
+                pickle.dump(results, f)
+
+            print(f"\nResults saved to: {output_dir / 'experiment_3_results.pkl'}")
+
+            # Generate histogram visualization
+            try:
+                import matplotlib
+                matplotlib.use('Agg')
+                import matplotlib.pyplot as plt
+
+                fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+                for idx, gen_name in enumerate(['hb_sbm', 'hb_lfr']):
+                    ax = axes[idx]
+                    r = results[gen_name]
+
+                    ax.hist(r['rho_samples'], bins=20, density=True, alpha=0.7,
+                           color='#2E86AB' if gen_name == 'hb_sbm' else '#A23B72',
+                           edgecolor='black')
+
+                    # Add vertical lines for mean and std
+                    ax.axvline(r['mean'], color='red', linestyle='-', linewidth=2,
+                              label=f"Mean = {r['mean']:.3f}")
+                    ax.axvline(r['mean'] - r['std'], color='red', linestyle='--', alpha=0.5)
+                    ax.axvline(r['mean'] + r['std'], color='red', linestyle='--', alpha=0.5,
+                              label=f"±1 Std = {r['std']:.3f}")
+
+                    ax.set_xlabel('Hub-bridging ratio ρ_HB', fontsize=12, fontweight='bold')
+                    ax.set_ylabel('Density', fontsize=12, fontweight='bold')
+                    ax.set_title(f"{gen_name.upper()} (h={r['h']})\nCV = {r['cv']:.2f}%, n={r['n_samples']}",
+                                fontsize=14, fontweight='bold')
+                    ax.legend(fontsize=10)
+                    ax.grid(True, alpha=0.3)
+
+                plt.suptitle('Experiment 3: Concentration and Reproducibility',
+                            fontsize=16, fontweight='bold', y=1.02)
+                plt.tight_layout()
+
+                fig.savefig(str(output_dir / 'figure_concentration.png'),
+                           dpi=300, bbox_inches='tight', facecolor='white')
+                fig.savefig(str(output_dir / 'figure_concentration.pdf'),
+                           dpi=300, bbox_inches='tight', facecolor='white')
+                plt.close(fig)
+
+                print(f"Figure saved to: {output_dir / 'figure_concentration.png'}")
+            except Exception as e:
+                print(f"Warning: Could not generate visualization: {e}")
+
+        elif sys.argv[1] == "--exp4":
+            # Run Experiment 4: Modularity Independence
+            n_samples = 30
+            if len(sys.argv) > 2:
+                n_samples = int(sys.argv[2])
+
+            print("\n" + "=" * 70)
+            print("Running Experiment 4: Modularity Independence Test")
+            print("=" * 70)
+            print("Validating Theorem 4(a): Q independent of ρ_HB for fixed constraints")
+            print()
+
+            results = run_experiment_4_modularity(
+                generators=['hb_lfr'],  # HB-LFR preferred for exact degree preservation
+                h_values=[0.0, 0.5, 1.0, 1.5, 2.0],
+                n_samples=n_samples,
+                n=500,
+                seed=42,
+            )
+
+            # Save results
+            import pickle
+            output_dir = Path("data/results")
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            with open(output_dir / 'experiment_4_results.pkl', 'wb') as f:
+                pickle.dump(results, f)
+
+            print(f"\nResults saved to: {output_dir / 'experiment_4_results.pkl'}")
+
+            # Generate visualization
+            try:
+                import matplotlib
+                matplotlib.use('Agg')
+                import matplotlib.pyplot as plt
+                from scipy.stats import linregress
+
+                fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+                colors = {'hb_sbm': '#2E86AB', 'hb_lfr': '#A23B72'}
+
+                for gen_name, gen_res in results.items():
+                    color = colors.get(gen_name, '#666666')
+                    h_values = gen_res['h_values']
+
+                    # Panel A: Scatter plot Q vs ρ_HB
+                    ax = axes[0]
+
+                    all_rho = [rho for h in h_values for rho in gen_res['rho_samples'][h]]
+                    all_Q = [Q for h in h_values for Q in gen_res['Q_samples'][h]]
+
+                    ax.scatter(all_rho, all_Q, alpha=0.4, s=30,
+                              label=gen_name.upper(), color=color)
+
+                    # Add regression line
+                    slope, intercept, r_value, p_value, std_err = linregress(all_rho, all_Q)
+                    x_line = np.array([min(all_rho), max(all_rho)])
+                    y_line = slope * x_line + intercept
+                    ax.plot(x_line, y_line, '--', color=color, linewidth=2, alpha=0.6,
+                           label=f'{gen_name.upper()} fit (r={r_value:+.3f})')
+
+                    # Panel B: Q vs h (should be flat)
+                    ax_b = axes[1]
+
+                    Q_means = [gen_res['statistics']['Q_means'][h] for h in h_values]
+                    Q_stds = [gen_res['statistics']['Q_stds'][h] for h in h_values]
+
+                    ax_b.errorbar(h_values, Q_means, yerr=Q_stds,
+                                 fmt='o-', capsize=5, capthick=2, markersize=8,
+                                 label=gen_name.upper(), color=color, linewidth=2)
+
+                    # Add horizontal line at mean Q
+                    mean_Q = np.mean(Q_means)
+                    ax_b.axhline(mean_Q, color=color, linestyle='--', alpha=0.5)
+
+                    # Panel C: Coefficient of variation
+                    ax_c = axes[2]
+
+                    cv_values = [gen_res['statistics']['Q_cv_by_h'][h] * 100 for h in h_values]
+                    mean_cv = gen_res['statistics']['mean_cv'] * 100
+
+                    x_pos = np.arange(len(h_values))
+                    ax_c.bar(x_pos, cv_values, color=color, alpha=0.7, label=gen_name.upper())
+                    ax_c.axhline(mean_cv, color=color, linestyle='--', linewidth=2,
+                                label=f'Mean CV={mean_cv:.1f}%')
+
+                # Format Panel A
+                axes[0].set_xlabel('Hub-bridging ratio ρ_HB', fontsize=12, fontweight='bold')
+                axes[0].set_ylabel('Modularity Q', fontsize=12, fontweight='bold')
+                axes[0].set_title('Panel A: Q vs ρ_HB\n(Testing Independence)',
+                                 fontsize=14, fontweight='bold')
+                axes[0].legend(fontsize=9)
+                axes[0].grid(True, alpha=0.3)
+
+                # Add text box with correlation
+                gen_name = list(results.keys())[0]
+                textstr = f'Pearson r = {results[gen_name]["statistics"]["pearson_r"]:+.3f}\n'
+                textstr += f'p = {results[gen_name]["statistics"]["pearson_p"]:.4f}\n'
+                if abs(results[gen_name]["statistics"]["pearson_r"]) < 0.2:
+                    textstr += 'Independent ✓'
+                elif abs(results[gen_name]["statistics"]["pearson_r"]) < 0.3:
+                    textstr += 'Weak dependence'
+                else:
+                    textstr += 'Dependent ⚠'
+
+                props = dict(boxstyle='round', facecolor=colors.get(gen_name, '#666666'), alpha=0.2)
+                axes[0].text(0.05, 0.95, textstr, transform=axes[0].transAxes,
+                            fontsize=10, verticalalignment='top', bbox=props)
+
+                # Format Panel B
+                axes[1].set_xlabel('Hub-bridging parameter h', fontsize=12, fontweight='bold')
+                axes[1].set_ylabel('Modularity Q', fontsize=12, fontweight='bold')
+                axes[1].set_title('Panel B: Q vs h\n(Should be Flat)',
+                                 fontsize=14, fontweight='bold')
+                axes[1].legend(fontsize=10)
+                axes[1].grid(True, alpha=0.3)
+
+                # Format Panel C
+                axes[2].set_xlabel('h value', fontsize=12, fontweight='bold')
+                axes[2].set_ylabel('Coefficient of Variation (%)', fontsize=12, fontweight='bold')
+                axes[2].set_title('Panel C: Q Variability\nacross h values',
+                                 fontsize=14, fontweight='bold')
+                axes[2].set_xticks(x_pos)
+                axes[2].set_xticklabels([f'{h:.1f}' for h in h_values])
+                axes[2].legend(fontsize=10)
+                axes[2].grid(True, alpha=0.3, axis='y')
+
+                plt.suptitle('Experiment 4: Modularity Independence Test\n'
+                            'Validating Theorem 4(a): Q independent of ρ_HB',
+                            fontsize=16, fontweight='bold', y=1.02)
+                plt.tight_layout()
+
+                fig.savefig(str(output_dir / 'figure_modularity_independence.png'),
+                           dpi=300, bbox_inches='tight', facecolor='white')
+                fig.savefig(str(output_dir / 'figure_modularity_independence.pdf'),
+                           dpi=300, bbox_inches='tight', facecolor='white')
+                plt.close(fig)
+
+                print(f"Figure saved to: {output_dir / 'figure_modularity_independence.png'}")
+            except Exception as e:
+                print(f"Warning: Could not generate visualization: {e}")
+                import traceback
+                traceback.print_exc()
+
+            # Print summary
+            print("\n" + "=" * 70)
+            print("EXPERIMENT 4 SUMMARY")
+            print("=" * 70)
+            for gen_name, gen_res in results.items():
+                s = gen_res['statistics']
+                a = gen_res['assessment']
+                print(f"\n{gen_name.upper()}:")
+                print(f"  Pearson r(ρ_HB, Q):   {s['pearson_r']:+.4f}")
+                print(f"  ANOVA p-value:        {s['anova_p']:.4f}")
+                print(f"  Q range across h:     {s['Q_range']:.4f}")
+                print(f"  Relative range:       {s['relative_range']:.1%}")
+                print(f"  Degree preserved:     {s['degree_preserved']}")
+                print(f"  Status:               {'✓ PASS' if a['passes_overall'] else '✗ FAIL'}")
+
+        elif sys.argv[1] == "--improved":
             # Run improved Experiment 1
             results = experiment_1_parameter_control_improved(
                 n_samples=30,

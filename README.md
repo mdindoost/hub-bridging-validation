@@ -135,7 +135,7 @@ dspar_sparsification(G, ratio)               # Paper method (with replacement + 
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/hub-bridging-validation.git
+git clone https://github.com/mdindoost/hub-bridging-validation.git
 cd hub-bridging-validation
 ```
 
@@ -293,14 +293,6 @@ Edit `config/network_params.yaml` to customize:
 
 If you use this framework in your research, please cite:
 
-```bibtex
-@phdthesis{yourname2024hubbridging,
-  title={Hub-Bridging Network Generators for Realistic Benchmark Networks},
-  author={Your Name},
-  year={2024},
-  school={Your University}
-}
-```
 
 ## License
 

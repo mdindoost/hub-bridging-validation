@@ -504,3 +504,410 @@ def save_figure(
     """
     fig.savefig(filepath, dpi=dpi, bbox_inches=bbox_inches)
     logger.info(f"Saved figure to {filepath}")
+
+
+def plot_degree_preservation_comparison(
+    results: Dict[str, Any],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (18, 5),
+) -> plt.Figure:
+    """
+    Visualize degree distribution preservation results from Experiment 2.
+
+    Creates 3-panel figure:
+    - Panel A: τ estimates vs h (both generators)
+    - Panel B: Degree distribution examples (h=0 vs h=2)
+    - Panel C: Mean degree stability
+
+    Parameters
+    ----------
+    results : Dict[str, Any]
+        Results from experiment_2_degree_preservation_full()
+    save_path : str, optional
+        Path to save figure
+    figsize : Tuple[int, int], optional
+        Figure size
+
+    Returns
+    -------
+    plt.Figure
+        Matplotlib figure object
+    """
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+    # Determine available generators
+    generators = [g for g in ['hb_sbm', 'hb_lfr'] if g in results]
+    if not generators:
+        logger.warning("No generator results found")
+        return fig
+
+    h_values = results[generators[0]]['h_values']
+    colors = {'hb_sbm': '#2E86AB', 'hb_lfr': '#A23B72'}
+    markers = {'hb_sbm': 'o', 'hb_lfr': 's'}
+
+    # Panel A: τ estimates vs h
+    ax = axes[0]
+
+    for gen_name in generators:
+        gen_res = results[gen_name]
+        stats = gen_res.get('statistics', {})
+        tau_means = stats.get('tau_means', {})
+        tau_stds = stats.get('tau_stds', {})
+
+        means = [tau_means.get(h, np.nan) for h in h_values]
+        stds = [tau_stds.get(h, np.nan) for h in h_values]
+
+        # Filter out NaN values
+        valid_h = [h for i, h in enumerate(h_values) if not np.isnan(means[i])]
+        valid_means = [m for m in means if not np.isnan(m)]
+        valid_stds = [s for s in stds if not np.isnan(s)]
+
+        if valid_means:
+            ax.errorbar(valid_h, valid_means, yerr=valid_stds,
+                       fmt=f'{markers[gen_name]}-', capsize=5, capthick=2,
+                       label=gen_name.upper(),
+                       color=colors[gen_name], linewidth=2, markersize=8)
+
+    # Target line
+    target = stats.get('target_tau1', 2.5)
+    ax.axhline(y=target, color='gray', linestyle='--',
+              alpha=0.5, label=f'Target τ={target}')
+
+    # Acceptable range
+    ax.axhspan(target - 0.3, target + 0.3, alpha=0.1, color='green',
+              label='Acceptable range (±0.3)')
+
+    ax.set_xlabel('Hub-bridging parameter h', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Power-law exponent τ', fontsize=12, fontweight='bold')
+    ax.set_title('Panel A: Degree Exponent Preservation',
+                fontsize=14, fontweight='bold')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim([1.5, 4.0])
+
+    # Panel B: Example degree distributions (log-log)
+    ax = axes[1]
+
+    # Plot degree distributions for h=0 and h=max
+    h_compare = [h_values[0], h_values[-1]]  # First and last h values
+    line_styles = {h_values[0]: '-', h_values[-1]: '--'}
+    alphas = {h_values[0]: 0.7, h_values[-1]: 1.0}
+
+    for gen_name in generators:
+        gen_res = results[gen_name]
+        degree_seqs = gen_res.get('degree_sequences', {})
+
+        for h in h_compare:
+            if h in degree_seqs and degree_seqs[h]:
+                # Use first sample's degree sequence
+                degrees = degree_seqs[h][0]
+
+                # Compute degree distribution
+                unique, counts = np.unique(degrees, return_counts=True)
+                prob = counts / counts.sum()
+
+                label = f"{gen_name.upper()} (h={h:.1f})"
+                ax.loglog(unique, prob, marker=markers[gen_name],
+                         linestyle=line_styles[h],
+                         label=label, color=colors[gen_name],
+                         alpha=alphas[h], markersize=5, linewidth=1.5)
+
+    # Reference power-law line
+    x_ref = np.logspace(0.3, 2, 50)
+    y_ref = x_ref**(-2.5)
+    y_ref = y_ref / y_ref.max() * 0.3  # Scale for visibility
+    ax.loglog(x_ref, y_ref, 'k:', alpha=0.4, linewidth=2, label='τ=2.5 reference')
+
+    ax.set_xlabel('Degree k', fontsize=12, fontweight='bold')
+    ax.set_ylabel('P(k)', fontsize=12, fontweight='bold')
+    ax.set_title(f'Panel B: Degree Distributions\n(h={h_values[0]} vs h={h_values[-1]})',
+                fontsize=14, fontweight='bold')
+    ax.legend(fontsize=8, loc='lower left')
+    ax.grid(True, alpha=0.3)
+
+    # Panel C: Mean degree stability
+    ax = axes[2]
+
+    for gen_name in generators:
+        gen_res = results[gen_name]
+        mean_degs = gen_res.get('mean_degrees', {})
+
+        means = []
+        stds = []
+        valid_h = []
+
+        for h in h_values:
+            if h in mean_degs and mean_degs[h]:
+                valid_h.append(h)
+                means.append(np.mean(mean_degs[h]))
+                stds.append(np.std(mean_degs[h]))
+
+        if means:
+            ax.errorbar(valid_h, means, yerr=stds,
+                       fmt=f'{markers[gen_name]}-', capsize=5, capthick=2,
+                       label=gen_name.upper(),
+                       color=colors[gen_name], linewidth=2, markersize=8)
+
+    ax.set_xlabel('Hub-bridging parameter h', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Mean degree ⟨k⟩', fontsize=12, fontweight='bold')
+    ax.set_title('Panel C: Mean Degree Stability',
+                fontsize=14, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    # Add overall title
+    plt.suptitle('Experiment 2: Degree Distribution Preservation',
+                 fontsize=16, fontweight='bold', y=1.02)
+
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+        logger.info(f"Figure saved to: {save_path}")
+
+        # Also save PDF
+        pdf_path = save_path.replace('.png', '.pdf')
+        fig.savefig(pdf_path, dpi=300, bbox_inches='tight', facecolor='white')
+        logger.info(f"PDF saved to: {pdf_path}")
+
+    return fig
+
+
+def plot_degree_preservation_summary_table(
+    results: Dict[str, Any],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (10, 6),
+) -> plt.Figure:
+    """
+    Create a summary table visualization for Experiment 2 results.
+
+    Parameters
+    ----------
+    results : Dict[str, Any]
+        Results from experiment_2_degree_preservation_full()
+    save_path : str, optional
+        Path to save figure
+    figsize : Tuple[int, int], optional
+        Figure size
+
+    Returns
+    -------
+    plt.Figure
+        Matplotlib figure object with table
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.axis('off')
+
+    generators = [g for g in ['hb_sbm', 'hb_lfr'] if g in results]
+    h_values = results[generators[0]]['h_values']
+
+    # Build table data
+    headers = ['h'] + [f'{g.upper()} τ' for g in generators]
+    table_data = [headers]
+
+    for h in h_values:
+        row = [f'{h:.2f}']
+        for gen_name in generators:
+            stats = results[gen_name].get('statistics', {})
+            tau_means = stats.get('tau_means', {})
+            tau_stds = stats.get('tau_stds', {})
+            mean = tau_means.get(h, np.nan)
+            std = tau_stds.get(h, np.nan)
+            if not np.isnan(mean):
+                row.append(f'{mean:.2f} ± {std:.2f}')
+            else:
+                row.append('N/A')
+        table_data.append(row)
+
+    # Add summary row
+    summary_row = ['Overall']
+    for gen_name in generators:
+        stats = results[gen_name].get('statistics', {})
+        overall_mean = stats.get('tau_overall_mean', np.nan)
+        overall_std = stats.get('tau_overall_std', np.nan)
+        if not np.isnan(overall_mean):
+            summary_row.append(f'{overall_mean:.2f} ± {overall_std:.2f}')
+        else:
+            summary_row.append('N/A')
+    table_data.append(summary_row)
+
+    # Add validation status
+    status_row = ['Status']
+    for gen_name in generators:
+        stats = results[gen_name].get('statistics', {})
+        passes = stats.get('passes', False)
+        status_row.append('✓ PASS' if passes else '✗ FAIL')
+    table_data.append(status_row)
+
+    # Create table
+    table = ax.table(cellText=table_data, cellLoc='center',
+                    loc='center', colWidths=[0.15] + [0.25] * len(generators))
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1.2, 2)
+
+    # Style header row
+    for i in range(len(headers)):
+        table[(0, i)].set_facecolor('#E8E8E8')
+        table[(0, i)].set_text_props(weight='bold')
+
+    # Style summary row
+    summary_row_idx = len(h_values) + 1
+    for i in range(len(headers)):
+        table[(summary_row_idx, i)].set_facecolor('#F5F5F5')
+        table[(summary_row_idx, i)].set_text_props(weight='bold')
+
+    # Style status row
+    status_row_idx = len(h_values) + 2
+    for i, gen_name in enumerate(generators, 1):
+        stats = results[gen_name].get('statistics', {})
+        passes = stats.get('passes', False)
+        color = '#C8E6C9' if passes else '#FFCDD2'
+        table[(status_row_idx, i)].set_facecolor(color)
+        table[(status_row_idx, i)].set_text_props(weight='bold')
+
+    ax.set_title('Experiment 2: Degree Exponent (τ) Summary\n',
+                fontsize=14, fontweight='bold')
+
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+        logger.info(f"Table saved to: {save_path}")
+
+    return fig
+
+
+def plot_modularity_independence(
+    results: Dict[str, Any],
+    save_path: Optional[str] = None,
+    figsize: Tuple[int, int] = (18, 5),
+) -> plt.Figure:
+    """
+    Visualize modularity independence results for Experiment 4.
+
+    Creates 3-panel figure:
+    - Panel A: Q vs ρ_HB scatter plot with correlation
+    - Panel B: Q vs h with error bars (should be flat)
+    - Panel C: Q coefficient of variation across h values
+
+    Parameters
+    ----------
+    results : Dict[str, Any]
+        Results from experiment_4_modularity_independence()
+    save_path : str, optional
+        Path to save figure
+    figsize : Tuple[int, int], optional
+        Figure size
+
+    Returns
+    -------
+    plt.Figure
+        Matplotlib figure object
+    """
+    from scipy.stats import linregress
+
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+    colors = {'hb_sbm': '#2E86AB', 'hb_lfr': '#A23B72'}
+
+    for gen_name, gen_res in results.items():
+        color = colors.get(gen_name, '#666666')
+        h_values = gen_res['h_values']
+
+        # Panel A: Scatter plot Q vs ρ_HB
+        ax = axes[0]
+
+        all_rho = [rho for h in h_values for rho in gen_res['rho_samples'][h]]
+        all_Q = [Q for h in h_values for Q in gen_res['Q_samples'][h]]
+
+        ax.scatter(all_rho, all_Q, alpha=0.4, s=30,
+                  label=gen_name.upper(), color=color)
+
+        # Add regression line
+        slope, intercept, r_value, p_value, std_err = linregress(all_rho, all_Q)
+        x_line = np.array([min(all_rho), max(all_rho)])
+        y_line = slope * x_line + intercept
+        ax.plot(x_line, y_line, '--', color=color, linewidth=2, alpha=0.6,
+               label=f'{gen_name.upper()} fit (r={r_value:+.3f})')
+
+        # Panel B: Q vs h (should be flat)
+        ax_b = axes[1]
+
+        Q_means = [gen_res['statistics']['Q_means'][h] for h in h_values]
+        Q_stds = [gen_res['statistics']['Q_stds'][h] for h in h_values]
+
+        ax_b.errorbar(h_values, Q_means, yerr=Q_stds,
+                     fmt='o-', capsize=5, capthick=2, markersize=8,
+                     label=gen_name.upper(), color=color, linewidth=2)
+
+        # Add horizontal line at mean Q
+        mean_Q = np.mean(Q_means)
+        ax_b.axhline(mean_Q, color=color, linestyle='--', alpha=0.5)
+
+        # Panel C: Coefficient of variation
+        ax_c = axes[2]
+
+        cv_values = [gen_res['statistics']['Q_cv_by_h'][h] * 100 for h in h_values]
+        mean_cv = gen_res['statistics']['mean_cv'] * 100
+
+        x_pos = np.arange(len(h_values))
+        ax_c.bar(x_pos, cv_values, color=color, alpha=0.7, label=gen_name.upper())
+        ax_c.axhline(mean_cv, color=color, linestyle='--', linewidth=2,
+                    label=f'Mean CV={mean_cv:.1f}%')
+
+    # Format Panel A
+    axes[0].set_xlabel('Hub-bridging ratio ρ_HB', fontsize=12, fontweight='bold')
+    axes[0].set_ylabel('Modularity Q', fontsize=12, fontweight='bold')
+    axes[0].set_title('Panel A: Q vs ρ_HB\n(Testing Independence)',
+                     fontsize=14, fontweight='bold')
+    axes[0].legend(fontsize=9)
+    axes[0].grid(True, alpha=0.3)
+
+    # Add text box with correlation for first generator
+    gen_name = list(results.keys())[0]
+    textstr = f'Pearson r = {results[gen_name]["statistics"]["pearson_r"]:+.3f}\n'
+    textstr += f'p = {results[gen_name]["statistics"]["pearson_p"]:.4f}\n'
+    if abs(results[gen_name]["statistics"]["pearson_r"]) < 0.2:
+        textstr += 'Independent ✓'
+    elif abs(results[gen_name]["statistics"]["pearson_r"]) < 0.3:
+        textstr += 'Weak dependence'
+    else:
+        textstr += 'Dependent ⚠'
+
+    props = dict(boxstyle='round', facecolor=colors.get(gen_name, '#666666'), alpha=0.2)
+    axes[0].text(0.05, 0.95, textstr, transform=axes[0].transAxes,
+                fontsize=10, verticalalignment='top', bbox=props)
+
+    # Format Panel B
+    axes[1].set_xlabel('Hub-bridging parameter h', fontsize=12, fontweight='bold')
+    axes[1].set_ylabel('Modularity Q', fontsize=12, fontweight='bold')
+    axes[1].set_title('Panel B: Q vs h\n(Should be Flat)',
+                     fontsize=14, fontweight='bold')
+    axes[1].legend(fontsize=10)
+    axes[1].grid(True, alpha=0.3)
+
+    # Format Panel C
+    axes[2].set_xlabel('h value', fontsize=12, fontweight='bold')
+    axes[2].set_ylabel('Coefficient of Variation (%)', fontsize=12, fontweight='bold')
+    axes[2].set_title('Panel C: Q Variability\nacross h values',
+                     fontsize=14, fontweight='bold')
+    axes[2].set_xticks(x_pos)
+    axes[2].set_xticklabels([f'{h:.1f}' for h in h_values])
+    axes[2].legend(fontsize=10)
+    axes[2].grid(True, alpha=0.3, axis='y')
+
+    plt.suptitle('Experiment 4: Modularity Independence Test\n'
+                'Validating Theorem 4(a): Q independent of ρ_HB',
+                fontsize=16, fontweight='bold', y=1.02)
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+        logger.info(f"Figure saved to: {save_path}")
+
+        # Also save PDF
+        pdf_path = save_path.replace('.png', '.pdf')
+        if pdf_path != save_path:
+            fig.savefig(pdf_path, dpi=300, bbox_inches='tight', facecolor='white')
+            logger.info(f"PDF saved to: {pdf_path}")
+
+    return fig
