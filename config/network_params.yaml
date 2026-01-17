@@ -1,0 +1,131 @@
+# Network Generation Parameters
+# ==============================
+# Default parameters for LFR and SBM generators
+
+# Default LFR parameters
+lfr:
+  default:
+    n: 1000                    # Number of nodes
+    tau1: 2.5                  # Power-law exponent for degree distribution
+    tau2: 1.5                  # Power-law exponent for community size distribution
+    mu: 0.3                    # Mixing parameter (fraction of inter-community edges)
+    average_degree: 15         # Average node degree
+    max_degree: 50             # Maximum node degree
+    min_community: 20          # Minimum community size
+    max_community: 100         # Maximum community size
+
+  # Small network parameters (for quick testing)
+  small:
+    n: 250
+    tau1: 2.5
+    tau2: 1.5
+    mu: 0.3
+    average_degree: 10
+    max_degree: 25
+    min_community: 10
+    max_community: 50
+
+  # Large network parameters
+  large:
+    n: 5000
+    tau1: 2.5
+    tau2: 1.5
+    mu: 0.3
+    average_degree: 20
+    max_degree: 100
+    min_community: 50
+    max_community: 500
+
+  # Parameter ranges for testing
+  ranges:
+    n: [250, 500, 1000, 2000, 5000]
+    tau1: [2.0, 2.5, 3.0]
+    tau2: [1.0, 1.5, 2.0]
+    mu: [0.1, 0.2, 0.3, 0.4, 0.5]
+    average_degree: [10, 15, 20, 25]
+
+# Default SBM parameters
+sbm:
+  default:
+    n: 1000                    # Number of nodes
+    k: 10                      # Number of communities
+    p_in: 0.3                  # Intra-community edge probability
+    p_out: 0.05                # Inter-community edge probability
+    community_sizes: null      # If null, equal-sized communities
+
+  # Small network parameters
+  small:
+    n: 250
+    k: 5
+    p_in: 0.4
+    p_out: 0.1
+    community_sizes: null
+
+  # Large network parameters
+  large:
+    n: 5000
+    k: 20
+    p_in: 0.2
+    p_out: 0.02
+    community_sizes: null
+
+  # Parameter ranges for testing
+  ranges:
+    n: [250, 500, 1000, 2000, 5000]
+    k: [5, 10, 15, 20]
+    p_in: [0.1, 0.2, 0.3, 0.4, 0.5]
+    p_out: [0.01, 0.02, 0.05, 0.1]
+
+# Hub-bridging specific parameters
+hub_bridging:
+  # Hub-bridging exponent values for validation
+  h_values: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+
+  # Default hub-bridging exponent
+  default_h: 0.0
+
+  # Rewiring parameters (for HB-LFR rewiring approach)
+  rewiring:
+    max_attempts: 100          # Max attempts per rewiring operation
+    convergence_threshold: 0.01  # Stop when rho_HB change is below this
+
+  # Calibration parameters
+  calibration:
+    n_points: 11               # Number of h values for calibration curve
+    n_samples: 50              # Samples per h value
+    interpolation: cubic       # Interpolation method
+
+# Real network reference properties
+# (These are typical ranges observed in real networks)
+reference_properties:
+  hub_bridging_ratio:
+    typical_range: [1.0, 10.0]
+    description: "Ratio of average degree product for inter vs intra edges"
+
+  power_law_exponent:
+    typical_range: [2.0, 3.5]
+    description: "Degree distribution power-law exponent"
+
+  clustering_coefficient:
+    typical_range: [0.1, 0.6]
+    description: "Global clustering coefficient"
+
+  modularity:
+    typical_range: [0.3, 0.8]
+    description: "Modularity of community structure"
+
+# Network categories for comparison
+network_categories:
+  social:
+    - facebook_combined
+    - twitter_ego
+    - email_eu_core
+  biological:
+    - protein_interaction
+    - metabolic
+  technological:
+    - power_grid
+    - internet_as
+  information:
+    - web_stanford
+    - citation_hepth

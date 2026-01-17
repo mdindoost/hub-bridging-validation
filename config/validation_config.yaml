@@ -1,0 +1,120 @@
+# Hub-Bridging Validation Framework Configuration
+# ==============================================
+# This file contains experiment parameters and settings
+
+# General settings
+general:
+  random_seed: 42
+  n_jobs: -1  # Number of parallel jobs (-1 = all cores)
+  verbose: true
+  log_level: INFO
+
+# File paths
+paths:
+  data_dir: data
+  real_networks_dir: data/real_networks
+  generated_dir: data/generated
+  results_dir: data/results
+  figures_dir: data/results/figures
+  tables_dir: data/results/tables
+
+# Experiment sample sizes
+sample_sizes:
+  # Number of graphs to generate per parameter setting
+  parameter_control: 30      # Experiment 1: h -> rho_HB
+  degree_preservation: 30    # Experiment 2: degree distribution
+  modularity_independence: 30  # Experiment 3: modularity vs h
+  concentration: 100         # Experiment 4: variance analysis
+  property_matching: 20      # Experiment 5: real network matching
+  fitting: 30                # Experiment 6: network fitting
+  community_detection: 30    # Experiment 7: algorithm testing
+  sparsification: 30         # Experiment 8: sparsification behavior
+
+# Statistical test parameters
+statistics:
+  alpha: 0.05               # Significance level
+  power: 0.80               # Desired statistical power
+  confidence_level: 0.95    # Confidence interval level
+
+  # Multiple testing correction
+  correction_method: bonferroni  # Options: bonferroni, fdr_bh, fdr_by, holm
+
+  # Bootstrap parameters
+  n_bootstrap: 1000
+  bootstrap_ci_method: percentile  # Options: percentile, bca
+
+# Experiment-specific parameters
+experiments:
+  # Experiment 1: Parameter control
+  parameter_control:
+    h_values: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    fit_degree: 2  # Polynomial degree for fitting
+
+  # Experiment 2: Degree preservation
+  degree_preservation:
+    h_values: [0.0, 0.5, 1.0]
+    ks_threshold: 0.05  # Kolmogorov-Smirnov test threshold
+
+  # Experiment 3: Modularity independence
+  modularity_independence:
+    h_values: [0.0, 0.25, 0.5, 0.75, 1.0]
+    mu_values: [0.1, 0.3, 0.5]  # Mixing parameters
+
+  # Experiment 4: Concentration
+  concentration:
+    h_values: [0.0, 0.5, 1.0]
+    cv_threshold: 0.1  # Coefficient of variation threshold
+
+  # Experiment 5: Property matching
+  property_matching:
+    properties:
+      - degree_distribution
+      - clustering_coefficient
+      - path_length
+      - rich_club
+      - participation_coefficient
+      - hub_bridging_ratio
+    distance_metrics:
+      - mmd
+      - wasserstein
+      - ks_statistic
+
+  # Experiment 6: Fitting
+  fitting:
+    optimization_method: differential_evolution
+    max_iterations: 100
+    tolerance: 1e-4
+
+  # Experiment 7: Community detection
+  community_detection:
+    algorithms:
+      - louvain
+      - leiden
+      - infomap
+      - label_propagation
+    evaluation_metrics:
+      - nmi
+      - ari
+      - modularity
+
+  # Experiment 8: Sparsification
+  sparsification:
+    sparsification_ratios: [0.1, 0.2, 0.3, 0.4, 0.5]
+    methods:
+      - dspar
+      - random
+      - degree_based
+
+# Visualization settings
+visualization:
+  figure_format: pdf  # Options: pdf, png, svg
+  dpi: 300
+  style: seaborn-v0_8-whitegrid
+  figsize_single: [6, 4]
+  figsize_double: [12, 4]
+  color_palette: colorblind
+
+# Logging
+logging:
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: data/results/validation.log
