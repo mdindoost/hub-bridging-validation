@@ -39,6 +39,7 @@ def hb_lfr(
     max_iters: int = 5000,
     tolerance: float = 0.05,
     seed: Optional[int] = None,
+    return_iterations: bool = False,
 ) -> Tuple[nx.Graph, List[Set[int]]]:
     """
     Generate Hub-Bridged LFR benchmark graph.
@@ -174,6 +175,8 @@ def hb_lfr(
     # If h=0, return standard LFR
     if h == 0.0:
         logger.info("h=0, returning standard LFR")
+        if return_iterations:
+            return G, communities, 0
         return G, communities
 
     # Step 2: Compute target ρ_HB
@@ -184,7 +187,7 @@ def hb_lfr(
     logger.info(f"Target ρ_HB = {rho_target:.3f}")
 
     # Step 3: Rewire to achieve target
-    G = _rewire_for_hub_bridging(
+    G, iterations_used = _rewire_for_hub_bridging(
         G=G,
         communities_dict=communities_dict,
         rho_target=rho_target,
@@ -194,6 +197,8 @@ def hb_lfr(
         rng=rng,
     )
 
+    if return_iterations:
+        return G, communities, iterations_used
     return G, communities
 
 
@@ -316,7 +321,8 @@ def _rewire_for_hub_bridging(
         )
 
     logger.info(f"Rewiring complete: {successful_rewires} successful swaps")
-    return G
+    # Return graph and iterations used (iteration is from the for loop)
+    return G, iteration + 1
 
 
 def _rewire_step_increase(

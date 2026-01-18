@@ -221,12 +221,21 @@ def _save_results_to_csv(
         'rho_HB_real',
         'h_fitted',
         'achievable',
+        'achievable_range_min',
+        'achievable_range_max',
+        'calibration_samples_used',
+        'binary_search_iterations',
+        'max_iters_mode',
+        'max_iters_value',
+        'hb_mean_iters_to_converge',
         'hb_distance',
         'std_distance',
         'improvement',
         'improvement_percent',
         'n_hb_generated',
         'n_std_generated',
+        'generation_success_rate_hb',
+        'generation_success_rate_std',
     ]
 
     # Add property-specific columns
@@ -261,6 +270,31 @@ def _save_results_to_csv(
             fit_result = net_data.get('fit_result', {})
             row.append(fit_result.get('achievable', True))
 
+            # Achievable range from calibration (stored as tuple)
+            achievable_range = fit_result.get('achievable_range', (np.nan, np.nan))
+            rho_min = achievable_range[0] if achievable_range else np.nan
+            rho_max = achievable_range[1] if achievable_range else np.nan
+            row.append(rho_min if not np.isnan(rho_min) else '')
+            row.append(rho_max if not np.isnan(rho_max) else '')
+
+            # Calibration info
+            cal_curve = fit_result.get('calibration_curve', {})
+            h_values_tested = cal_curve.get('h_values', [])
+            n_cal_samples = len(h_values_tested) if h_values_tested else ''
+            # Binary search iterations = total samples - 3 (Phase 1 probes)
+            n_binary_iters = max(0, len(h_values_tested) - 3) if h_values_tested else ''
+            row.append(n_cal_samples)
+            row.append(n_binary_iters)
+
+            # Max iters mode and value
+            is_achievable = fit_result.get('achievable', True)
+            row.append('NORMAL' if is_achievable else 'FAST')
+            row.append(5000 if is_achievable else 500)
+
+            # HB mean iterations to converge
+            hb_mean_iters = net_data.get('hb_mean_iterations', np.nan)
+            row.append(f"{hb_mean_iters:.1f}" if not np.isnan(hb_mean_iters) else '')
+
             # Distances
             hb_dist = net_data.get('overall_distance_hb', np.nan)
             std_dist = net_data.get('overall_distance_std', np.nan)
@@ -271,9 +305,19 @@ def _save_results_to_csv(
             row.append(improvement if not np.isnan(improvement) else '')
             row.append(improvement * 100 if not np.isnan(improvement) else '')
 
-            # Counts
-            row.append(net_data.get('n_hb_generated', ''))
-            row.append(net_data.get('n_std_generated', ''))
+            # Counts and success rates
+            n_hb = net_data.get('n_hb_generated', 0)
+            n_std = net_data.get('n_std_generated', 0)
+            row.append(n_hb if n_hb else '')
+            row.append(n_std if n_std else '')
+
+            # Get target sample count from metadata (default 30)
+            metadata = results.get('metadata', {})
+            n_target = metadata.get('n_synthetic_per_real', 30)
+            hb_success_rate = n_hb / n_target if n_target > 0 and n_hb else ''
+            std_success_rate = n_std / n_target if n_target > 0 and n_std else ''
+            row.append(f"{hb_success_rate:.2%}" if hb_success_rate else '')
+            row.append(f"{std_success_rate:.2%}" if std_success_rate else '')
 
             # Property-specific data
             hb_mean_props = net_data.get('hb_mean_properties', {})
@@ -1509,11 +1553,12 @@ def experiment_5_extended(
             logger.info(f"Step 4: Generating {n_synthetic_per_real} HB-LFR networks (h={h_fitted:.3f})...")
 
         hb_lfr_props = []
+        hb_iterations = []  # Track iterations for each successful generation
 
         for i in range(n_synthetic_per_real):
             sample_seed = int(rng.integers(0, 2**31))
             try:
-                G_hb, communities_hb = hb_lfr(
+                G_hb, communities_hb, iters_used = hb_lfr(
                     n=lfr_params['n'],
                     tau1=lfr_params['tau1'],
                     tau2=lfr_params.get('tau2', 1.5),
@@ -1524,16 +1569,20 @@ def experiment_5_extended(
                     h=h_fitted,
                     seed=sample_seed,
                     max_iters=generation_max_iters,
+                    return_iterations=True,
                 )
                 props = comprehensive_network_properties_flat(
                     G_hb, communities_hb, f"{net_name}_HB_{i}"
                 )
                 hb_lfr_props.append(props)
+                hb_iterations.append(iters_used)
             except Exception as e:
                 logger.debug(f"  HB-LFR generation {i} failed: {e}")
                 continue
 
-        logger.info(f"  Successfully generated {len(hb_lfr_props)} HB-LFR networks")
+        # Calculate mean iterations
+        hb_mean_iterations = np.mean(hb_iterations) if hb_iterations else np.nan
+        logger.info(f"  Successfully generated {len(hb_lfr_props)} HB-LFR networks (mean iters: {hb_mean_iterations:.1f})")
 
         # Step 5: Generate Standard LFR networks (h=0)
         logger.info(f"Step 5: Generating {n_synthetic_per_real} Standard LFR networks (h=0)...")
@@ -1653,6 +1702,7 @@ def experiment_5_extended(
             'overall_improvement': improvement,
             'n_hb_generated': len(hb_lfr_props),
             'n_std_generated': len(std_lfr_props),
+            'hb_mean_iterations': hb_mean_iterations,
         }
 
         # Add to regime tracking
