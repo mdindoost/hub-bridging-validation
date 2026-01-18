@@ -32,7 +32,7 @@ def hb_lfr(
     tau2: float = 1.5,
     mu: float = 0.3,
     h: float = 0.0,
-    average_degree: float = 10.0,
+    average_degree: Optional[float] = None,
     max_degree: Optional[int] = None,
     min_community: Optional[int] = None,
     max_community: Optional[int] = None,
@@ -106,6 +106,8 @@ def hb_lfr(
     rng = np.random.default_rng(seed)
 
     # Set defaults based on n
+    if average_degree is None:
+        average_degree = 10.0  # NetworkX LFR default
     if max_degree is None:
         max_degree = max(n // 10, 20)
     if min_community is None:

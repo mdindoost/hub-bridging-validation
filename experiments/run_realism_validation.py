@@ -120,6 +120,12 @@ def parse_args():
         action="store_true",
         help="Download networks before running (uses scripts/download_snap_networks.py)",
     )
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        help="Number of parallel workers (default: 1 = sequential)",
+    )
     return parser.parse_args()
 
 
@@ -150,17 +156,19 @@ def load_real_networks():
 
 
 def _make_serializable(obj):
-    """Convert numpy arrays to lists for JSON serialization."""
+    """Convert numpy arrays and types to JSON-serializable Python types."""
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     elif isinstance(obj, dict):
         return {k: _make_serializable(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [_make_serializable(v) for v in obj]
-    elif isinstance(obj, (np.int64, np.int32)):
+    elif isinstance(obj, np.integer):  # Covers all numpy integer types (NumPy 2.0 compatible)
         return int(obj)
-    elif isinstance(obj, (np.float64, np.float32)):
+    elif isinstance(obj, np.floating):  # Covers all numpy float types (NumPy 2.0 compatible)
         return float(obj)
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
     elif callable(obj):
         return "<function>"
     else:
@@ -258,7 +266,7 @@ def run_experiment_5_real_network_matching(args, output_dir):
         n_h_points = 15
     else:
         n_synthetic_samples = args.n_samples or 30
-        n_calibration_samples = 10
+        n_calibration_samples = 5  # Reduced from 10 for speed (uses per-h early termination)
         n_h_points = 25
 
     # Run experiment
@@ -273,7 +281,8 @@ def run_experiment_5_real_network_matching(args, output_dir):
             use_weighted_distance=True,
             n_calibration_samples=n_calibration_samples,
             n_h_points=n_h_points,
-            save_results=False,  # We'll save manually
+            save_results=True,  # Enable incremental CSV saving
+            results_dir=str(output_dir),
             seed=args.seed,
         )
         summary = summarize_experiment_5_extended(results)
@@ -284,6 +293,8 @@ def run_experiment_5_real_network_matching(args, output_dir):
             real_networks_dict=networks,
             n_synthetic_per_real=n_synthetic_samples,
             n_calibration_samples=n_calibration_samples,
+            save_results=True,  # Enable incremental CSV saving
+            results_dir=str(output_dir),
             seed=args.seed,
         )
         summary = summarize_experiment_5(results)

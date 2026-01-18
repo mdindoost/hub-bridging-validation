@@ -87,6 +87,7 @@ def _get_results_file_paths(
     results_dir: str,
     prefix: str = "exp5",
     timestamp: Optional[str] = None,
+    network_name: Optional[str] = None,
 ) -> Dict[str, Path]:
     """
     Get file paths for results storage.
@@ -99,6 +100,8 @@ def _get_results_file_paths(
         File prefix (default: "exp5")
     timestamp : str, optional
         Timestamp string (default: generates new one)
+    network_name : str, optional
+        If provided, include in filename (for parallel execution)
 
     Returns
     -------
@@ -111,10 +114,16 @@ def _get_results_file_paths(
     results_path = Path(results_dir)
     results_path.mkdir(parents=True, exist_ok=True)
 
+    # Include network name if provided (for parallel execution)
+    if network_name:
+        suffix = f"{timestamp}_{network_name}"
+    else:
+        suffix = timestamp
+
     return {
-        'pickle': results_path / f"{prefix}_{timestamp}.pkl",
-        'csv': results_path / f"{prefix}_{timestamp}.csv",
-        'incremental': results_path / f"{prefix}_{timestamp}_incremental.pkl",
+        'pickle': results_path / f"{prefix}_{suffix}.pkl",
+        'csv': results_path / f"{prefix}_{suffix}.csv",
+        'incremental': results_path / f"{prefix}_{suffix}_incremental.pkl",
         'timestamp': timestamp,
     }
 
@@ -908,7 +917,15 @@ def experiment_5_real_network_matching(
             logger.warning(f"  Using default h = {h_fitted}")
 
         # Step 4: Generate HB-LFR networks
-        logger.info(f"Step 4: Generating {n_synthetic_per_real} HB-LFR networks (h={h_fitted:.3f})...")
+        # Use reduced max_iters if target was not achievable (saves time)
+        target_achievable = fit_result.get('achievable', True)
+        generation_max_iters = 500 if not target_achievable else 5000
+
+        if not target_achievable:
+            logger.info(f"Step 4: Generating {n_synthetic_per_real} HB-LFR networks (h={h_fitted:.3f}, FAST MODE - target not achievable)...")
+        else:
+            logger.info(f"Step 4: Generating {n_synthetic_per_real} HB-LFR networks (h={h_fitted:.3f})...")
+
         hb_lfr_props = []
 
         for i in range(n_synthetic_per_real):
@@ -924,6 +941,7 @@ def experiment_5_real_network_matching(
                     max_community=lfr_params.get('max_community'),
                     h=h_fitted,
                     seed=sample_seed,
+                    max_iters=generation_max_iters,
                 )
                 props = comprehensive_network_properties_flat(
                     G_hb, communities_hb, f"{net_name}_HB_{i}"
@@ -1065,6 +1083,7 @@ def experiment_5_real_network_matching(
         # Store results
         results[net_name] = {
             'real_properties': real_props,
+            'domain': net_data.get('domain', 'unknown'),
             'lfr_params': lfr_params,
             'h_fitted': h_fitted,
             'fit_result': fit_result,
@@ -1262,6 +1281,7 @@ def compute_weighted_distance(
     synth_props: Dict[str, float],
     properties: List[str],
     weights: Optional[Dict[str, float]] = None,
+    max_relative_error: float = 2.0,
 ) -> float:
     """
     Compute weighted property distance between real and synthetic networks.
@@ -1276,6 +1296,9 @@ def compute_weighted_distance(
         Properties to compare
     weights : dict, optional
         Property weights (default: PROPERTY_WEIGHTS)
+    max_relative_error : float
+        Maximum allowed relative error per property (default: 2.0 = 200%)
+        This prevents properties with extreme differences from dominating.
 
     Returns
     -------
@@ -1288,6 +1311,16 @@ def compute_weighted_distance(
     total_weight = 0.0
     weighted_squared_error = 0.0
 
+    # Properties that can be negative or close to zero need special handling
+    # Use absolute difference scaled to typical range instead of relative error
+    special_properties = {
+        'degree_assortativity': 2.0,   # Range is [-1, 1], so scale factor is 2
+        'modularity': 1.0,              # Range is [0, 1]
+        'transitivity': 1.0,            # Range is [0, 1]
+        'clustering_avg': 1.0,          # Range is [0, 1]
+        'delta_DSpar': 1.0,             # Can be close to 0, range ~[-0.5, 0.5]
+    }
+
     for prop in properties:
         real_val = real_props.get(prop, np.nan)
         synth_val = synth_props.get(prop, np.nan)
@@ -1297,11 +1330,19 @@ def compute_weighted_distance(
 
         weight = weights.get(prop, 1.0)
 
-        # Normalized error (relative to real value if non-zero)
-        if real_val != 0:
+        # For properties with bounded ranges, use scaled absolute error
+        if prop in special_properties:
+            scale = special_properties[prop]
+            error = abs(synth_val - real_val) / scale
+        # For unbounded properties, use relative error with cap
+        elif abs(real_val) > 1e-10:
             error = abs(synth_val - real_val) / abs(real_val)
+            # Cap relative error to prevent extreme values from dominating
+            error = min(error, max_relative_error)
         else:
+            # real_val is essentially zero
             error = abs(synth_val - real_val)
+            error = min(error, max_relative_error)
 
         weighted_squared_error += weight * (error ** 2)
         total_weight += weight
@@ -1323,6 +1364,7 @@ def experiment_5_extended(
     save_results: bool = True,
     results_dir: str = "data/results",
     seed: int = 42,
+    max_workers: int = 1,
 ) -> Dict[str, Any]:
     """
     Extended Experiment 5: Real Network Property Matching with weighted metrics.
@@ -1387,7 +1429,9 @@ def experiment_5_extended(
     logger.info("")
 
     # Set up file paths for incremental saving
-    file_paths = _get_results_file_paths(results_dir, prefix="exp5_extended")
+    # Include network name in filename if single network (parallel execution mode)
+    single_network_name = list(real_networks_dict.keys())[0] if len(real_networks_dict) == 1 else None
+    file_paths = _get_results_file_paths(results_dir, prefix="exp5_extended", network_name=single_network_name)
     logger.info(f"Results will be saved to: {file_paths['pickle']}")
     logger.info(f"Incremental saves to: {file_paths['incremental']}")
 
@@ -1455,7 +1499,15 @@ def experiment_5_extended(
             logger.warning(f"  Using default h = {h_fitted}")
 
         # Step 4: Generate HB-LFR networks
-        logger.info(f"Step 4: Generating {n_synthetic_per_real} HB-LFR networks (h={h_fitted:.3f})...")
+        # Use reduced max_iters if target was not achievable (saves time)
+        target_achievable = fit_result.get('achievable', True)
+        generation_max_iters = 500 if not target_achievable else 5000
+
+        if not target_achievable:
+            logger.info(f"Step 4: Generating {n_synthetic_per_real} HB-LFR networks (h={h_fitted:.3f}, FAST MODE - target not achievable)...")
+        else:
+            logger.info(f"Step 4: Generating {n_synthetic_per_real} HB-LFR networks (h={h_fitted:.3f})...")
+
         hb_lfr_props = []
 
         for i in range(n_synthetic_per_real):
@@ -1471,6 +1523,7 @@ def experiment_5_extended(
                     max_community=lfr_params.get('max_community'),
                     h=h_fitted,
                     seed=sample_seed,
+                    max_iters=generation_max_iters,
                 )
                 props = comprehensive_network_properties_flat(
                     G_hb, communities_hb, f"{net_name}_HB_{i}"
@@ -1553,6 +1606,31 @@ def experiment_5_extended(
         else:
             improvement = np.nan
 
+        # Build per-property comparison dict for CSV export
+        comparison = {}
+        for prop in properties_to_compare:
+            real_val = real_props.get(prop, np.nan)
+            hb_val = hb_mean_props.get(prop, np.nan)
+            std_val = std_mean_props.get(prop, np.nan)
+
+            # Per-property improvement: how much closer is HB-LFR to real vs Standard LFR
+            if not np.isnan(real_val) and real_val != 0:
+                hb_err = abs(hb_val - real_val) / abs(real_val) if not np.isnan(hb_val) else np.nan
+                std_err = abs(std_val - real_val) / abs(real_val) if not np.isnan(std_val) else np.nan
+                if not np.isnan(hb_err) and not np.isnan(std_err) and std_err > 0:
+                    prop_improvement = (std_err - hb_err) / std_err
+                else:
+                    prop_improvement = np.nan
+            else:
+                prop_improvement = np.nan
+
+            comparison[prop] = {
+                'real_value': real_val,
+                'hb_mean': hb_val,
+                'std_mean': std_val,
+                'improvement': prop_improvement,
+            }
+
         logger.info(f"  HB-LFR distance: {hb_distance:.4f}")
         logger.info(f"  Standard LFR distance: {std_distance:.4f}")
         logger.info(f"  Improvement: {improvement:.1%}" if not np.isnan(improvement) else "  Improvement: N/A")
@@ -1560,6 +1638,7 @@ def experiment_5_extended(
         # Store network results
         results['networks'][net_name] = {
             'real_properties': real_props,
+            'domain': net_data.get('domain', 'unknown'),
             'lfr_params': lfr_params,
             'h_fitted': h_fitted,
             'fit_result': fit_result,
@@ -1568,6 +1647,7 @@ def experiment_5_extended(
             'standard_lfr_properties': std_lfr_props,
             'hb_mean_properties': hb_mean_props,
             'std_mean_properties': std_mean_props,
+            'comparison': comparison,
             'overall_distance_hb': hb_distance,
             'overall_distance_std': std_distance,
             'overall_improvement': improvement,

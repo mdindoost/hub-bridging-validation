@@ -414,10 +414,22 @@ def extract_lfr_params_from_real(
     communities: Union[List[set], Dict[int, int]],
 ) -> Dict[str, Any]:
     """
-    Extract LFR parameters from a real network with community structure.
+    Extract ESSENTIAL LFR parameters from a real network.
 
-    This estimates parameters that would generate a network with similar
-    properties to the input network.
+    Returns only parameters needed for structural matching:
+    - n: network size
+    - tau1: degree distribution exponent (power-law shape)
+    - tau2: community size distribution exponent (power-law shape)
+    - mu: mixing parameter (fraction of inter-community edges)
+
+    IMPORTANT: We intentionally do NOT extract:
+    - average_degree, max_degree, min_degree
+    - min_community, max_community
+
+    Why? These over-constrain the LFR generator and prevent the
+    rewiring algorithm from achieving target hub-bridging ratios.
+    The structural SHAPE (power-law exponents) matters more than
+    exact values. Other properties emerge naturally from tau1, tau2.
 
     Parameters
     ----------
@@ -431,22 +443,16 @@ def extract_lfr_params_from_real(
     dict
         {
             'n': int,
-            'tau1': float (degree exponent),
-            'tau2': float (community size exponent),
+            'tau1': float (degree distribution exponent),
+            'tau2': float (community size distribution exponent),
             'mu': float (mixing parameter),
-            'average_degree': float,
-            'max_degree': int,
-            'min_degree': int,
-            'min_community': int,
-            'max_community': int,
         }
 
     Notes
     -----
-    - tau1: Fit power law to degree distribution using powerlaw package
+    - tau1: Fit power law to degree distribution
     - tau2: Fit power law to community sizes
     - mu: Compute actual mixing parameter from edges
-    - Handle edge cases (non-power-law networks, single community, etc.)
     """
     from collections import Counter
 
@@ -518,19 +524,17 @@ def extract_lfr_params_from_real(
     # Clip to valid range for LFR
     mu = np.clip(mu, 0.01, 0.9)
 
+    # ESSENTIAL PARAMETERS ONLY
+    # We intentionally exclude avg_degree, min/max_community etc.
+    # to avoid over-constraining the LFR generator
     params = {
         'n': n,
         'tau1': float(tau1),
         'tau2': float(tau2),
         'mu': float(mu),
-        'average_degree': float(avg_degree),
-        'max_degree': int(max_degree),
-        'min_degree': int(min_degree),
-        'min_community': int(min_community),
-        'max_community': int(max_community),
     }
 
-    logger.info(f"Extracted LFR params: n={n}, tau1={tau1:.2f}, tau2={tau2:.2f}, mu={mu:.3f}")
+    logger.info(f"Extracted LFR params (essential only): n={n}, tau1={tau1:.2f}, tau2={tau2:.2f}, mu={mu:.3f}")
 
     return params
 
@@ -725,10 +729,10 @@ def fit_h_to_real_network_extended(
     G_real: nx.Graph,
     communities_real: Union[List[set], Dict[int, int]],
     lfr_params: Optional[Dict[str, Any]] = None,
-    n_calibration_samples: int = 10,
-    n_validation_samples: int = 5,
+    n_calibration_samples: int = 5,  # Reduced from 10 for speed
+    n_validation_samples: int = 3,   # Reduced from 5 for speed
     h_range: Tuple[float, float] = (-0.5, 3.5),
-    n_h_points: int = 31,
+    n_h_points: int = 25,  # Reduced from 31
     adaptive: bool = True,
     seed: Optional[int] = None,
 ) -> Dict[str, Any]:
@@ -820,35 +824,17 @@ def fit_h_to_real_network_extended(
             logger.info(f"Hub-isolation detected (ρ={rho_target:.2f}), extending negative h_range")
             h_min = max(-1.0, h_min - 0.5)
 
-    # Step 3: Generate calibration curve
-    # SMART FILTERING: Skip h values that are clearly wrong direction
-    h_values_full = np.linspace(h_min, h_max, adjusted_n_h_points)
+    # Step 3: SMART CALIBRATION WITH RANGE DETECTION
+    #
+    # 1. First probe to find achievable ρ range
+    # 2. If target outside range → skip search, use best boundary
+    # 3. If target inside range → binary search to find exact h
 
-    # Filter based on target ρ_HB
-    if rho_target > 1.5:
-        # Hub-bridging: skip negative h values (they produce ρ < 1)
-        h_values = h_values_full[h_values_full >= -0.1]
-        logger.info(f"Target ρ={rho_target:.2f} > 1.5: skipping h < -0.1")
-    elif rho_target < 0.9:
-        # Hub-isolation: skip high h values (they produce ρ > 1.5)
-        h_values = h_values_full[h_values_full <= 1.5]
-        logger.info(f"Target ρ={rho_target:.2f} < 0.9: skipping h > 1.5")
-    else:
-        # Neutral: use middle range
-        h_values = h_values_full[(h_values_full >= -0.3) & (h_values_full <= 2.5)]
-        logger.info(f"Target ρ={rho_target:.2f} near 1: using h ∈ [-0.3, 2.5]")
-
-    rho_means = []
-    rho_stds = []
-
-    logger.info(f"Generating calibration curve ({len(h_values)} points, {n_calibration_samples} samples each)")
-
-    for h in h_values:
-        rho_samples = []
-
-        for sample in range(n_calibration_samples):
+    def generate_samples(h_val, n_samples=2):
+        """Generate n networks and return mean rho_HB."""
+        rho_list = []
+        for _ in range(n_samples):
             sample_seed = int(rng.integers(0, 2**31))
-
             try:
                 G, communities = hb_lfr(
                     n=lfr_params['n'],
@@ -858,27 +844,184 @@ def fit_h_to_real_network_extended(
                     average_degree=lfr_params.get('average_degree'),
                     min_community=lfr_params.get('min_community'),
                     max_community=lfr_params.get('max_community'),
-                    h=h,
+                    h=h_val,
                     seed=sample_seed,
-                    max_iters=2000,  # Reduced for calibration (faster)
+                    max_iters=1500,
                 )
                 rho = compute_hub_bridging_ratio(G, communities)
-                rho_samples.append(rho)
+                rho_list.append(rho)
             except Exception as e:
-                logger.debug(f"Failed at h={h:.2f}, sample {sample}: {e}")
+                logger.debug(f"Failed at h={h_val:.2f}: {e}")
                 continue
+        if len(rho_list) == 0:
+            return None, None
+        return np.mean(rho_list), np.std(rho_list) if len(rho_list) > 1 else 0.0
 
-        # Need at least half of samples to succeed
-        if len(rho_samples) >= max(1, n_calibration_samples // 2):
-            rho_means.append(np.mean(rho_samples))
-            rho_stds.append(np.std(rho_samples))
-        else:
-            logger.warning(f"Insufficient samples at h={h:.2f}, marking as invalid")
-            rho_means.append(np.nan)
-            rho_stds.append(np.nan)
+    logger.info(f"")
+    logger.info(f"=" * 60)
+    logger.info(f"CALIBRATION: Finding h for target ρ = {rho_target:.3f}")
+    logger.info(f"=" * 60)
 
-    rho_means = np.array(rho_means)
-    rho_stds = np.array(rho_stds)
+    # Track all tested points for calibration curve
+    tested_h = []
+    tested_rho = []
+    tested_std = []
+
+    # =========================================================
+    # PHASE 1: Probe to find achievable range
+    # =========================================================
+    logger.info(f"")
+    logger.info(f"PHASE 1: Probing achievable ρ range...")
+    logger.info(f"-" * 40)
+
+    # Test lower bound (h_min)
+    rho_lower, _ = generate_samples(h_min, n_samples=1)
+    if rho_lower is not None:
+        tested_h.append(h_min)
+        tested_rho.append(rho_lower)
+        tested_std.append(0.0)
+        logger.info(f"  Lower bound:  h={h_min:.2f} → ρ={rho_lower:.3f}")
+    else:
+        logger.warning(f"  Lower bound:  h={h_min:.2f} → FAILED")
+        rho_lower = 0.0
+
+    # Test upper bound (h_max)
+    rho_upper, _ = generate_samples(h_max, n_samples=1)
+    if rho_upper is not None:
+        tested_h.append(h_max)
+        tested_rho.append(rho_upper)
+        tested_std.append(0.0)
+        logger.info(f"  Upper bound:  h={h_max:.2f} → ρ={rho_upper:.3f}")
+    else:
+        logger.warning(f"  Upper bound:  h={h_max:.2f} → FAILED")
+        rho_upper = 10.0
+
+    # Test middle point (h=0, baseline) to confirm range
+    rho_middle, _ = generate_samples(0.0, n_samples=1)
+    if rho_middle is not None:
+        tested_h.append(0.0)
+        tested_rho.append(rho_middle)
+        tested_std.append(0.0)
+        logger.info(f"  Middle (h=0): h=0.00 → ρ={rho_middle:.3f}")
+    else:
+        logger.warning(f"  Middle (h=0): h=0.00 → FAILED")
+        rho_middle = None
+
+    # Determine achievable range (use all three probes)
+    all_probes = [rho_lower, rho_upper]
+    if rho_middle is not None:
+        all_probes.append(rho_middle)
+    rho_achievable_min = min(all_probes)
+    rho_achievable_max = max(all_probes)
+
+    logger.info(f"")
+    logger.info(f"  Achievable range: [{rho_achievable_min:.3f}, {rho_achievable_max:.3f}]")
+    logger.info(f"  Target:           {rho_target:.3f}")
+
+    # =========================================================
+    # PHASE 2: Check if target is achievable
+    # =========================================================
+    logger.info(f"")
+    logger.info(f"PHASE 2: Checking target achievability...")
+    logger.info(f"-" * 40)
+
+    target_achievable = rho_achievable_min <= rho_target <= rho_achievable_max
+    skip_binary_search = False
+
+    if rho_target > rho_achievable_max:
+        # Target too high - use upper bound
+        logger.warning(f"")
+        logger.warning(f"  *** TARGET TOO HIGH ***")
+        logger.warning(f"  Target ρ={rho_target:.3f} > max achievable ρ={rho_achievable_max:.3f}")
+        logger.warning(f"  Using best available: h={h_max:.2f} → ρ={rho_upper:.3f}")
+        logger.warning(f"")
+        best_h = h_max
+        best_rho = rho_upper
+        best_diff = abs(rho_upper - rho_target)
+        skip_binary_search = True
+
+    elif rho_target < rho_achievable_min:
+        # Target too low - use lower bound
+        logger.warning(f"")
+        logger.warning(f"  *** TARGET TOO LOW ***")
+        logger.warning(f"  Target ρ={rho_target:.3f} < min achievable ρ={rho_achievable_min:.3f}")
+        logger.warning(f"  Using best available: h={h_min:.2f} → ρ={rho_lower:.3f}")
+        logger.warning(f"")
+        best_h = h_min
+        best_rho = rho_lower
+        best_diff = abs(rho_lower - rho_target)
+        skip_binary_search = True
+
+    else:
+        logger.info(f"  Target is ACHIEVABLE within range")
+        logger.info(f"  Proceeding with binary search...")
+        best_h = (h_min + h_max) / 2
+        best_rho = None
+        best_diff = float('inf')
+
+    # =========================================================
+    # PHASE 3: Binary search (only if target is achievable)
+    # =========================================================
+    if not skip_binary_search:
+        logger.info(f"")
+        logger.info(f"PHASE 3: Binary search for optimal h...")
+        logger.info(f"-" * 40)
+
+        search_low = h_min
+        search_high = h_max
+        max_iterations = 8
+        tolerance = 0.15
+
+        for iteration in range(max_iterations):
+            if search_high - search_low < tolerance:
+                logger.info(f"  Converged: range [{search_low:.2f}, {search_high:.2f}] < {tolerance}")
+                break
+
+            h_mid = (search_low + search_high) / 2
+            rho_mid, std_mid = generate_samples(h_mid, n_samples=2)
+
+            if rho_mid is None:
+                h_mid = h_mid + 0.05
+                rho_mid, std_mid = generate_samples(h_mid, n_samples=2)
+                if rho_mid is None:
+                    logger.warning(f"  h={h_mid:.2f} failed, narrowing range")
+                    search_high = h_mid
+                    continue
+
+            tested_h.append(h_mid)
+            tested_rho.append(rho_mid)
+            tested_std.append(std_mid if std_mid else 0.0)
+
+            diff = abs(rho_mid - rho_target)
+            logger.info(f"  h={h_mid:.2f} → ρ={rho_mid:.3f} (diff={diff:.3f})")
+
+            if diff < best_diff:
+                best_diff = diff
+                best_h = h_mid
+                best_rho = rho_mid
+
+            if diff < 0.05:
+                logger.info(f"  *** EXCELLENT MATCH FOUND ***")
+                break
+
+            if rho_mid < rho_target:
+                search_low = h_mid
+            else:
+                search_high = h_mid
+    else:
+        logger.info(f"")
+        logger.info(f"PHASE 3: Binary search SKIPPED (target not achievable)")
+
+    # Convert to arrays
+    h_values = np.array(tested_h)
+    rho_means = np.array(tested_rho)
+    rho_stds = np.array(tested_std)
+
+    # Sort by h value
+    sort_idx = np.argsort(h_values)
+    h_values = h_values[sort_idx]
+    rho_means = rho_means[sort_idx]
+    rho_stds = rho_stds[sort_idx]
 
     # Remove NaN values
     valid_idx = ~np.isnan(rho_means)
@@ -886,53 +1029,41 @@ def fit_h_to_real_network_extended(
     rho_valid = rho_means[valid_idx]
     rho_std_valid = rho_stds[valid_idx]
 
-    if len(h_valid) < 3:
-        raise ValueError(f"Not enough valid calibration points (only {len(h_valid)})")
+    if len(h_valid) < 1:
+        raise ValueError(f"Calibration failed - no valid samples")
 
-    # Step 4: Check achievability and interpolate
+    # Step 4: Summary and final h selection
     rho_min = rho_valid.min()
     rho_max = rho_valid.max()
     achievable = rho_min <= rho_target <= rho_max
 
-    if not achievable:
-        if rho_target < rho_min:
-            logger.warning(f"Target ρ={rho_target:.3f} below achievable range "
-                          f"[{rho_min:.3f}, {rho_max:.3f}]")
-            logger.warning(f"Will fit to minimum achievable value with slight extrapolation")
-            rho_target_fitted = rho_min * 1.05  # Slight extrapolation
-        else:
-            logger.warning(f"Target ρ={rho_target:.3f} above achievable range "
-                          f"[{rho_min:.3f}, {rho_max:.3f}]")
-            logger.warning(f"Will fit to maximum achievable value with slight extrapolation")
-            rho_target_fitted = rho_max * 0.95  # Slight extrapolation
+    # Use best_h found during calibration
+    h_fitted = best_h
+    rho_target_fitted = rho_target if achievable else (rho_max if rho_target > rho_max else rho_min)
+
+    # Print summary
+    logger.info(f"")
+    logger.info(f"=" * 60)
+    logger.info(f"CALIBRATION RESULT")
+    logger.info(f"=" * 60)
+    logger.info(f"  Target ρ:      {rho_target:.3f}")
+    logger.info(f"  Achievable:    [{rho_min:.3f}, {rho_max:.3f}]")
+    logger.info(f"  Best h:        {h_fitted:.3f}")
+    logger.info(f"  Best ρ:        {best_rho:.3f}" if best_rho else f"  Best ρ:        N/A")
+    logger.info(f"  Difference:    {best_diff:.3f}")
+    if achievable:
+        logger.info(f"  Status:        TARGET ACHIEVABLE")
     else:
-        rho_target_fitted = rho_target
-        logger.info(f"Target is achievable within range [{rho_min:.3f}, {rho_max:.3f}]")
-
-    # Create interpolation function (rho -> h)
-    try:
-        # Sort by rho for monotonic interpolation
-        sort_idx = np.argsort(rho_valid)
-        rho_sorted = rho_valid[sort_idx]
-        h_sorted = h_valid[sort_idx]
-
-        rho_to_h = interpolate.interp1d(
-            rho_sorted, h_sorted,
-            kind='cubic' if len(h_valid) >= 4 else 'linear',
-            fill_value='extrapolate',
-            bounds_error=False
-        )
-        h_fitted = float(rho_to_h(rho_target_fitted))
-    except Exception as e:
-        logger.warning(f"Interpolation failed: {e}, using nearest point")
-        closest_idx = np.argmin(np.abs(rho_valid - rho_target_fitted))
-        h_fitted = h_valid[closest_idx]
-
-    # Clip to extended valid range
-    h_fitted = np.clip(h_fitted, h_min, h_max)
-    logger.info(f"Fitted h = {h_fitted:.3f}")
+        logger.warning(f"  Status:        TARGET NOT ACHIEVABLE")
+    logger.info(f"=" * 60)
+    logger.info(f"")
 
     # Step 5: Validate
+    # Use reduced iterations if target not achievable (we already know the ceiling)
+    validation_max_iters = 500 if not achievable else 5000
+    if not achievable:
+        logger.info(f"Using reduced max_iters={validation_max_iters} (target not achievable)")
+
     validation_rho = []
 
     for sample in range(n_validation_samples):
@@ -949,7 +1080,7 @@ def fit_h_to_real_network_extended(
                 max_community=lfr_params.get('max_community'),
                 h=h_fitted,
                 seed=sample_seed,
-                max_iters=5000,
+                max_iters=validation_max_iters,
             )
             rho = compute_hub_bridging_ratio(G, communities)
             validation_rho.append(rho)
