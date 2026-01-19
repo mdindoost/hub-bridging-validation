@@ -40,6 +40,7 @@ def hb_lfr(
     tolerance: float = 0.05,
     seed: Optional[int] = None,
     return_iterations: bool = False,
+    target_rho: Optional[float] = None,
 ) -> Tuple[nx.Graph, List[Set[int]]]:
     """
     Generate Hub-Bridged LFR benchmark graph.
@@ -78,6 +79,11 @@ def hb_lfr(
         Convergence tolerance for ρ_HB (default: 0.05)
     seed : int, optional
         Random seed for reproducibility
+    target_rho : float, optional
+        Explicit target hub-bridging ratio. If provided, overrides the
+        formula-based target computed from h. Use this when calibrating
+        to match a specific real network's rho_HB. If None (default),
+        target is computed as: 1.0 + 1.5 * (1 - exp(-0.8 * h))
 
     Returns
     -------
@@ -172,25 +178,30 @@ def hb_lfr(
         'average_degree': average_degree,
     }
 
-    # If h=0, return standard LFR
-    if h == 0.0:
+    # If h=0 and no explicit target, return standard LFR
+    if h == 0.0 and target_rho is None:
         logger.info("h=0, returning standard LFR")
         if return_iterations:
             return G, communities, 0
         return G, communities
 
     # Step 2: Compute target ρ_HB
-    # Empirical calibration: ρ ≈ 1 + 1.5*(1 - exp(-0.8*h))
-    # This captures the saturation behavior observed in HB-SBM
-    rho_target = 1.0 + 1.5 * (1.0 - np.exp(-0.8 * h))
-
-    logger.info(f"Target ρ_HB = {rho_target:.3f}")
+    # BUG 2 FIX: Use explicit target_rho if provided (from calibration)
+    # Otherwise fall back to formula for standalone use
+    if target_rho is not None:
+        rho_target_value = target_rho
+        logger.info(f"Target ρ_HB = {rho_target_value:.3f} (from calibration)")
+    else:
+        # Empirical calibration: ρ ≈ 1 + 1.5*(1 - exp(-0.8*h))
+        # This captures the saturation behavior observed in HB-SBM
+        rho_target_value = 1.0 + 1.5 * (1.0 - np.exp(-0.8 * h))
+        logger.info(f"Target ρ_HB = {rho_target_value:.3f} (from formula, h={h:.2f})")
 
     # Step 3: Rewire to achieve target
     G, iterations_used = _rewire_for_hub_bridging(
         G=G,
         communities_dict=communities_dict,
-        rho_target=rho_target,
+        rho_target=rho_target_value,
         h=h,
         max_iters=max_iters,
         tolerance=tolerance,
@@ -540,7 +551,7 @@ def hb_lfr_rewiring(
     # Compute target
     rho_target = 1.0 + 1.5 * (1.0 - np.exp(-0.8 * h))
 
-    return _rewire_for_hub_bridging(
+    G_rewired, _ = _rewire_for_hub_bridging(
         G=G,
         communities_dict=communities_dict,
         rho_target=rho_target,
@@ -549,3 +560,4 @@ def hb_lfr_rewiring(
         tolerance=tolerance,
         rng=rng,
     )
+    return G_rewired

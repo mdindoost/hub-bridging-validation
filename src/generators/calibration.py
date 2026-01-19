@@ -802,6 +802,8 @@ def fit_h_to_real_network(
                     max_community=lfr_params.get('max_community'),
                     h=h,
                     seed=sample_seed,
+                    # BUG 2 FIX: Pass real target to hb_lfr
+                    target_rho=rho_target,
                 )
                 rho = compute_hub_bridging_ratio(G, communities)
                 rho_samples.append(rho)
@@ -865,6 +867,8 @@ def fit_h_to_real_network(
                 max_community=lfr_params.get('max_community'),
                 h=h_fitted,
                 seed=sample_seed,
+                # BUG 2 FIX: Pass real target to hb_lfr
+                target_rho=rho_target,
             )
             rho = compute_hub_bridging_ratio(G, communities)
             validation_rho.append(rho)
@@ -1004,8 +1008,14 @@ def fit_h_to_real_network_extended(
     # 2. If target outside range → skip search, use best boundary
     # 3. If target inside range → binary search to find exact h
 
-    def generate_samples(h_val, n_samples=2):
-        """Generate n networks and return mean rho_HB."""
+    def generate_samples(h_val, n_samples=2, use_target_rho=True):
+        """Generate n networks and return mean rho_HB.
+
+        Args:
+            h_val: Hub-bridging parameter to test
+            n_samples: Number of networks to generate
+            use_target_rho: If True, pass real target to hb_lfr (Bug 2 fix)
+        """
         rho_list = []
         for _ in range(n_samples):
             sample_seed = int(rng.integers(0, 2**31))
@@ -1021,6 +1031,9 @@ def fit_h_to_real_network_extended(
                     h=h_val,
                     seed=sample_seed,
                     max_iters=1500,
+                    # BUG 2 FIX: Pass real target to hb_lfr instead of letting
+                    # it compute formula-based target from h
+                    target_rho=rho_target if use_target_rho else None,
                 )
                 rho = compute_hub_bridging_ratio(G, communities)
                 rho_list.append(rho)
@@ -1059,18 +1072,7 @@ def fit_h_to_real_network_extended(
         logger.warning(f"  Lower bound:  h={h_min:.2f} → FAILED")
         rho_lower = 0.0
 
-    # Test upper bound (h_max)
-    rho_upper, _ = generate_samples(h_max, n_samples=1)
-    if rho_upper is not None:
-        tested_h.append(h_max)
-        tested_rho.append(rho_upper)
-        tested_std.append(0.0)
-        logger.info(f"  Upper bound:  h={h_max:.2f} → ρ={rho_upper:.3f}")
-    else:
-        logger.warning(f"  Upper bound:  h={h_max:.2f} → FAILED")
-        rho_upper = 10.0
-
-    # Test middle point (h=0, baseline) to confirm range
+    # Test middle point (h=0, baseline) FIRST - needed for upper bound estimation
     rho_middle, _ = generate_samples(0.0, n_samples=1)
     if rho_middle is not None:
         tested_h.append(0.0)
@@ -1081,12 +1083,62 @@ def fit_h_to_real_network_extended(
         logger.warning(f"  Middle (h=0): h=0.00 → FAILED")
         rho_middle = None
 
-    # Determine achievable range (use all three probes)
-    all_probes = [rho_lower, rho_upper]
+    # Test upper bound (h_max)
+    rho_upper, _ = generate_samples(h_max, n_samples=1)
+    upper_probe_failed = False
+    if rho_upper is not None:
+        tested_h.append(h_max)
+        tested_rho.append(rho_upper)
+        tested_std.append(0.0)
+        logger.info(f"  Upper bound:  h={h_max:.2f} → ρ={rho_upper:.3f}")
+    else:
+        upper_probe_failed = True
+        # BUG 1 FIX: Estimate rho_upper based on h=0 result and mu
+        # Instead of arbitrary 10.0, use conservative estimate
+        mu = lfr_params.get('mu', 0.3)
+        if rho_middle is not None:
+            # Factor depends on mixing parameter - lower mu means lower ceiling
+            if mu < 0.2:
+                factor = 1.3  # Low mixing → lower achievable ceiling
+            elif mu < 0.4:
+                factor = 1.5  # Medium mixing
+            else:
+                factor = 2.0  # High mixing allows more rewiring headroom
+
+            rho_upper = rho_middle * factor
+            logger.warning(
+                f"  Upper bound:  h={h_max:.2f} → FAILED (generation error)"
+            )
+            logger.warning(
+                f"  Estimating rho_upper = {rho_upper:.3f} "
+                f"(h=0 result × {factor:.1f} for mu={mu:.2f})"
+            )
+        else:
+            # Both middle and upper failed - very problematic network
+            rho_upper = 2.0  # Conservative default
+            logger.error(
+                f"  Upper bound:  h={h_max:.2f} → FAILED"
+            )
+            logger.error(
+                f"  Both upper and middle probes failed! "
+                f"Using conservative default rho_upper = {rho_upper:.1f}"
+            )
+
+    # Determine achievable range (use all successful probes)
+    all_probes = [rho_lower]
+    if not upper_probe_failed:
+        all_probes.append(rho_upper)
     if rho_middle is not None:
         all_probes.append(rho_middle)
+
     rho_achievable_min = min(all_probes)
-    rho_achievable_max = max(all_probes)
+    # For max: use actual upper if available, else use estimated
+    if not upper_probe_failed:
+        rho_achievable_max = max(all_probes)
+    else:
+        # Use estimated upper bound (already computed above)
+        rho_achievable_max = rho_upper
+        logger.info(f"  Note: Upper bound is ESTIMATED (probe failed)")
 
     logger.info(f"")
     logger.info(f"  Achievable range: [{rho_achievable_min:.3f}, {rho_achievable_max:.3f}]")
@@ -1255,6 +1307,8 @@ def fit_h_to_real_network_extended(
                 h=h_fitted,
                 seed=sample_seed,
                 max_iters=validation_max_iters,
+                # BUG 2 FIX: Pass real target to hb_lfr
+                target_rho=rho_target,
             )
             rho = compute_hub_bridging_ratio(G, communities)
             validation_rho.append(rho)
