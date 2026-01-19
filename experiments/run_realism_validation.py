@@ -126,6 +126,12 @@ def parse_args():
         default=1,
         help="Number of parallel workers (default: 1 = sequential)",
     )
+    parser.add_argument(
+        "--max-nodes",
+        type=int,
+        default=None,
+        help="Override max nodes filter (default: 100000 for extended, 5000 otherwise)",
+    )
     return parser.parse_args()
 
 
@@ -220,18 +226,31 @@ def run_experiment_5_real_network_matching(args, output_dir):
         networks = create_sample_networks()
     else:
         logger.info(f"Loading networks from: {args.data_dir}")
+        # Determine max_nodes (use arg override if provided)
+        if getattr(args, 'max_nodes', None):
+            max_nodes = args.max_nodes
+        elif use_extended:
+            max_nodes = 100000 if not args.quick else 1000
+        else:
+            max_nodes = 5000 if not args.quick else 500
+
+        # Get network filter (if specified) to pass to loader for early filtering
+        network_filter = getattr(args, 'networks', None)
+
         if use_extended:
             # Use the enhanced loader for extended experiment
             networks = load_networks_for_experiment_5(
                 data_dir=args.data_dir,
                 min_nodes=100 if not args.quick else 30,
-                max_nodes=100000 if not args.quick else 1000,
+                max_nodes=max_nodes,
+                network_names=network_filter,
             )
         else:
             networks = load_real_networks_from_snap(
                 data_dir=args.data_dir,
                 min_nodes=30,
-                max_nodes=5000 if not args.quick else 500,
+                max_nodes=max_nodes,
+                network_names=network_filter,
             )
 
     if not networks:
@@ -239,12 +258,6 @@ def run_experiment_5_real_network_matching(args, output_dir):
         networks = create_sample_networks()
 
     logger.info(f"Loaded {len(networks)} networks")
-
-    # Filter to specific networks if requested
-    if getattr(args, 'networks', None):
-        networks = {name: data for name, data in networks.items()
-                   if any(n in name for n in args.networks)}
-        logger.info(f"Filtered to {len(networks)} networks: {list(networks.keys())}")
 
     # Sort networks by size (smallest to largest) if requested
     if getattr(args, 'sort_by_size', True):

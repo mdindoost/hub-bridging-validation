@@ -42,6 +42,7 @@ def load_real_networks_from_snap(
     max_nodes: Optional[int] = None,
     min_nodes: int = 50,
     require_communities: bool = False,
+    network_names: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Load real networks from SNAP dataset collection.
@@ -62,6 +63,9 @@ def load_real_networks_from_snap(
         Minimum number of nodes. Networks smaller than this are skipped.
     require_communities : bool
         If True, skip networks without ground-truth communities.
+    network_names : list of str, optional
+        Only load networks whose names contain any of these strings.
+        Allows early filtering to avoid loading/processing unnecessary networks.
 
     Returns
     -------
@@ -115,6 +119,10 @@ def load_real_networks_from_snap(
                 for file_path in domain_dir.iterdir():
                     if _is_network_file(file_path):
                         network_name = file_path.stem
+                        # Early filter by network name if specified
+                        if network_names is not None:
+                            if not any(n in network_name for n in network_names):
+                                continue
                         result = _load_single_network(
                             file_path, domain, max_nodes, min_nodes
                         )
@@ -126,6 +134,10 @@ def load_real_networks_from_snap(
             for file_path in data_path.iterdir():
                 if _is_network_file(file_path):
                     network_name = file_path.stem
+                    # Early filter by network name if specified
+                    if network_names is not None:
+                        if not any(n in network_name for n in network_names):
+                            continue
                     result = _load_single_network(
                         file_path, domain, max_nodes, min_nodes
                     )
@@ -801,6 +813,7 @@ def load_networks_for_experiment_5(
     max_nodes: int = 100000,
     domains: Optional[List[str]] = None,
     include_expected_rho: bool = True,
+    network_names: Optional[List[str]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Load networks specifically formatted for Experiment 5.
@@ -820,6 +833,9 @@ def load_networks_for_experiment_5(
         Filter by domain
     include_expected_rho : bool
         Whether to add expected ρ_HB to metadata
+    network_names : list of str, optional
+        Only load networks whose names contain any of these strings.
+        Enables early filtering to avoid loading unnecessary networks.
 
     Returns
     -------
@@ -832,6 +848,7 @@ def load_networks_for_experiment_5(
         max_nodes=max_nodes,
         min_nodes=min_nodes,
         require_communities=False,
+        network_names=network_names,
     )
 
     # Add expected ρ_HB values

@@ -539,6 +539,174 @@ def extract_lfr_params_from_real(
     return params
 
 
+def extract_lfr_params_robust(
+    G: nx.Graph,
+    communities: Union[List[set], Dict[int, int]],
+    target_rho: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Extract LFR parameters with adaptive bounds to ensure generation feasibility.
+
+    Applies minimal intervention principle:
+    - tau1 ≤ 2.8 (ensures sufficient hubs for hub-bridging)
+    - tau2 ≤ 2.0 (LFR generator stability requirement)
+    - mu adjusted proportionally to target_rho for high targets
+
+    Parameters
+    ----------
+    G : networkx.Graph
+        Real network
+    communities : list of sets or dict
+        Community structure (list of sets or node->community dict)
+    target_rho : float, optional
+        Target hub-bridging ratio (for adaptive mu adjustment)
+
+    Returns
+    -------
+    dict
+        LFR parameters with keys:
+        - n, tau1, tau2, mu (adjusted values for generation)
+        - tau1_raw, tau2_raw, mu_raw (original extracted values)
+        - adjustments (dict describing applied changes)
+
+    Notes
+    -----
+    This function preserves raw parameters when they work, and only
+    applies minimal adjustments when necessary for generation stability
+    or to achieve the target hub-bridging ratio.
+    """
+    # First, extract raw parameters using existing function
+    raw_params = extract_lfr_params_from_real(G, communities)
+
+    n = raw_params['n']
+    tau1_raw = raw_params['tau1']
+    tau2_raw = raw_params['tau2']
+    mu_raw = raw_params['mu']
+
+    adjustments = {}
+
+    # 1. Cap tau1 at 2.8 (ensures hub availability for hub-bridging)
+    # High tau1 means steep degree distribution with fewer hubs
+    tau1 = min(tau1_raw, 2.8)
+    if tau1 < tau1_raw:
+        adjustments['tau1'] = f'capped from {tau1_raw:.2f} to {tau1:.2f} (ensures hub availability)'
+        logger.info(f"tau1 capped: {tau1_raw:.2f} → {tau1:.2f}")
+
+    # 2. Cap tau2 at 2.0 (LFR generation stability)
+    # High tau2 causes LFR to fail generating valid community sizes
+    tau2 = min(tau2_raw, 2.0)
+    if tau2 < tau2_raw:
+        adjustments['tau2'] = f'capped from {tau2_raw:.2f} to {tau2:.2f} (LFR stability)'
+        logger.info(f"tau2 capped: {tau2_raw:.2f} → {tau2:.2f}")
+
+    # 3. Adaptive mu adjustment for high hub-bridging targets
+    mu = mu_raw
+    if target_rho is not None and target_rho > 1.5:
+        # Proportional minimum based on target difficulty
+        # Higher target rho needs more inter-community edges for rewiring
+        mu_min = 0.20 + 0.05 * (target_rho - 1.5)
+        mu_min = min(mu_min, 0.35)  # Cap to preserve community structure
+
+        if mu_raw < mu_min:
+            mu = mu_min
+            adjustments['mu'] = f'boosted from {mu_raw:.3f} to {mu:.3f} (enables ρ_target={target_rho:.2f})'
+            logger.info(f"mu boosted: {mu_raw:.3f} → {mu:.3f} for target ρ={target_rho:.2f}")
+
+    # Final safety bounds
+    tau1 = float(np.clip(tau1, 2.0, 3.0))
+    tau2 = float(np.clip(tau2, 1.1, 2.0))
+    mu = float(np.clip(mu, 0.1, 0.6))
+
+    params = {
+        'n': n,
+        'tau1': tau1,
+        'tau2': tau2,
+        'mu': mu,
+        # Store raw values for reporting/transparency
+        'tau1_raw': float(tau1_raw),
+        'tau2_raw': float(tau2_raw),
+        'mu_raw': float(mu_raw),
+        # Track what adjustments were made
+        'adjustments': adjustments,
+    }
+
+    if adjustments:
+        logger.info(f"Applied {len(adjustments)} parameter adjustment(s): {list(adjustments.keys())}")
+    else:
+        logger.info("Using raw parameters (no adjustments needed)")
+
+    return params
+
+
+def extract_lfr_params_with_fallback(
+    G: nx.Graph,
+    communities: Union[List[set], Dict[int, int]],
+    target_rho: Optional[float] = None,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """
+    Wrapper with graceful degradation to canonical parameters.
+
+    First tries adaptive bounds. If generation still fails,
+    falls back to safe canonical parameters (tau1=2.5, tau2=1.5).
+
+    Parameters
+    ----------
+    G : networkx.Graph
+        Real network
+    communities : list of sets or dict
+        Community structure
+    target_rho : float, optional
+        Target hub-bridging ratio
+    seed : int
+        Random seed for validation test
+
+    Returns
+    -------
+    dict
+        LFR parameters (same format as extract_lfr_params_robust)
+    """
+    from .hb_lfr import hb_lfr
+
+    # Try adaptive bounds first
+    params = extract_lfr_params_robust(G, communities, target_rho)
+
+    # Test if these parameters can generate a valid network
+    try:
+        G_test, _ = hb_lfr(
+            n=params['n'],
+            tau1=params['tau1'],
+            tau2=params['tau2'],
+            mu=params['mu'],
+            h=0.0,
+            max_iters=1000,
+            seed=seed,
+        )
+        logger.info("✓ Extracted parameters validated successfully")
+        return params
+
+    except Exception as e:
+        logger.warning(f"Parameter validation failed: {e}")
+        logger.info("Falling back to canonical parameters (tau1=2.5, tau2=1.5)")
+
+        # Canonical fallback - these always work
+        params_canonical = {
+            'n': params['n'],
+            'tau1': 2.5,
+            'tau2': 1.5,
+            'mu': min(params['mu'], 0.45),  # Keep mu but cap it
+            # Preserve raw values for reporting
+            'tau1_raw': params['tau1_raw'],
+            'tau2_raw': params['tau2_raw'],
+            'mu_raw': params['mu_raw'],
+            'adjustments': {
+                'fallback': f'canonical parameters used after generation failed with tau1={params["tau1"]:.2f}, tau2={params["tau2"]:.2f}'
+            },
+        }
+
+        return params_canonical
+
+
 def fit_h_to_real_network(
     G_real: nx.Graph,
     communities_real: Union[List[set], Dict[int, int]],
@@ -603,9 +771,12 @@ def fit_h_to_real_network(
     rho_target = compute_hub_bridging_ratio(G_real, communities_real)
     logger.info(f"Target rho_HB = {rho_target:.3f}")
 
-    # Extract LFR params if not provided
+    # Extract LFR params if not provided (using robust extraction with adaptive bounds)
     if lfr_params is None:
-        lfr_params = extract_lfr_params_from_real(G_real, communities_real)
+        lfr_params = extract_lfr_params_robust(G_real, communities_real, target_rho=rho_target)
+        # Log any adjustments made
+        if lfr_params.get('adjustments'):
+            logger.info(f"Parameter adjustments applied: {list(lfr_params['adjustments'].keys())}")
 
     # Step 2: Generate calibration curve
     h_values = np.linspace(h_range[0], h_range[1], n_h_points)
@@ -800,9 +971,12 @@ def fit_h_to_real_network_extended(
     rho_target = compute_hub_bridging_ratio(G_real, communities_real)
     logger.info(f"Target ρ_HB = {rho_target:.3f}")
 
-    # Extract LFR params if not provided
+    # Extract LFR params if not provided (using robust extraction with adaptive bounds)
     if lfr_params is None:
-        lfr_params = extract_lfr_params_from_real(G_real, communities_real)
+        lfr_params = extract_lfr_params_robust(G_real, communities_real, target_rho=rho_target)
+        # Log any adjustments made
+        if lfr_params.get('adjustments'):
+            logger.info(f"Parameter adjustments applied: {list(lfr_params['adjustments'].keys())}")
 
     # Step 2: Adaptive range adjustment
     h_min, h_max = h_range

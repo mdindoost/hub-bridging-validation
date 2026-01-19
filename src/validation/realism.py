@@ -228,6 +228,15 @@ def _save_results_to_csv(
         'max_iters_mode',
         'max_iters_value',
         'hb_mean_iters_to_converge',
+        # LFR parameter adjustments (robust extraction)
+        'tau1_raw',
+        'tau1_used',
+        'tau2_raw',
+        'tau2_used',
+        'mu_raw',
+        'mu_used',
+        'param_adjustments',
+        # Distance metrics
         'hb_distance',
         'std_distance',
         'improvement',
@@ -294,6 +303,25 @@ def _save_results_to_csv(
             # HB mean iterations to converge
             hb_mean_iters = net_data.get('hb_mean_iterations', np.nan)
             row.append(f"{hb_mean_iters:.1f}" if not np.isnan(hb_mean_iters) else '')
+
+            # LFR parameter adjustments (robust extraction)
+            # lfr_params may have tau1_raw, tau2_raw, mu_raw and adjustments
+            tau1_raw = lfr_params.get('tau1_raw', lfr_params.get('tau1', ''))
+            tau1_used = lfr_params.get('tau1', '')
+            tau2_raw = lfr_params.get('tau2_raw', lfr_params.get('tau2', ''))
+            tau2_used = lfr_params.get('tau2', '')
+            mu_raw = lfr_params.get('mu_raw', lfr_params.get('mu', ''))
+            mu_used = lfr_params.get('mu', '')
+            adjustments = lfr_params.get('adjustments', {})
+            adj_summary = '; '.join(adjustments.keys()) if adjustments else 'none'
+
+            row.append(f"{tau1_raw:.3f}" if isinstance(tau1_raw, (int, float)) else tau1_raw)
+            row.append(f"{tau1_used:.3f}" if isinstance(tau1_used, (int, float)) else tau1_used)
+            row.append(f"{tau2_raw:.3f}" if isinstance(tau2_raw, (int, float)) else tau2_raw)
+            row.append(f"{tau2_used:.3f}" if isinstance(tau2_used, (int, float)) else tau2_used)
+            row.append(f"{mu_raw:.4f}" if isinstance(mu_raw, (int, float)) else mu_raw)
+            row.append(f"{mu_used:.4f}" if isinstance(mu_used, (int, float)) else mu_used)
+            row.append(adj_summary)
 
             # Distances
             hb_dist = net_data.get('overall_distance_hb', np.nan)
@@ -886,7 +914,7 @@ def experiment_5_real_network_matching(
     """
     from scipy.stats import mannwhitneyu
 
-    from ..generators.calibration import extract_lfr_params_from_real, fit_h_to_real_network
+    from ..generators.calibration import extract_lfr_params_robust, fit_h_to_real_network
     from ..generators.hb_lfr import hb_lfr
     from ..metrics.network_properties import comprehensive_network_properties_flat
 
@@ -934,10 +962,11 @@ def experiment_5_real_network_matching(
             G_real, communities_real, net_name
         )
 
-        # Step 2: Extract LFR parameters
+        # Step 2: Extract LFR parameters (with robust bounds)
         logger.info("Step 2: Extracting LFR parameters...")
+        target_rho = real_props.get('rho_HB')
         try:
-            lfr_params = extract_lfr_params_from_real(G_real, communities_real)
+            lfr_params = extract_lfr_params_robust(G_real, communities_real, target_rho=target_rho)
         except Exception as e:
             logger.error(f"Failed to extract LFR params for {net_name}: {e}")
             continue
@@ -1450,7 +1479,7 @@ def experiment_5_extended(
     from scipy.stats import mannwhitneyu
 
     from ..generators.calibration import (
-        extract_lfr_params_from_real,
+        extract_lfr_params_robust,
         fit_h_to_real_network,
         fit_h_to_real_network_extended,
     )
@@ -1514,10 +1543,10 @@ def experiment_5_extended(
         regime = categorize_by_rho_regime(rho_real) if not np.isnan(rho_real) else 'unknown'
         logger.info(f"  ρ_HB = {rho_real:.3f} (regime: {regime})")
 
-        # Step 2: Extract LFR parameters
+        # Step 2: Extract LFR parameters (with robust bounds)
         logger.info("Step 2: Extracting LFR parameters...")
         try:
-            lfr_params = extract_lfr_params_from_real(G_real, communities_real)
+            lfr_params = extract_lfr_params_robust(G_real, communities_real, target_rho=rho_real)
         except Exception as e:
             logger.error(f"Failed to extract LFR params for {net_name}: {e}")
             continue

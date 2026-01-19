@@ -32,6 +32,8 @@ from .calibration import (
     get_calibration_curve,
     h_for_target_rho,
     extract_lfr_params_from_real,
+    extract_lfr_params_robust,
+    extract_lfr_params_with_fallback,
     fit_h_to_real_network,
     fit_h_to_real_network_extended,
 )
@@ -52,6 +54,8 @@ __all__ = [
     "get_calibration_curve",
     "h_for_target_rho",
     "extract_lfr_params_from_real",
+    "extract_lfr_params_robust",
+    "extract_lfr_params_with_fallback",
     "fit_h_to_real_network",
     "fit_h_to_real_network_extended",
 ]

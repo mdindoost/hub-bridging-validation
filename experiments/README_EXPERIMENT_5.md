@@ -69,6 +69,50 @@ severely limited the achievable ρ range to [0.83, 0.91].
 - Per-network CSV files (merged at end)
 - 4 workers → ~4x speedup
 
+### 5. Robust Parameter Extraction (NEW)
+
+**Problem:** Some real networks have extreme parameter values that cause LFR generation to fail:
+- ca-CondMat: tau2=2.71 → LFR fails (can't generate valid community sizes)
+- wiki-Vote: tau1=2.93 → Very few hubs, narrow achievable ρ range
+- Result: 20% success rate for ca-CondMat, achievable ρ capped at ~0.88
+
+**Fix:** Added `extract_lfr_params_robust()` with adaptive bounds:
+
+```python
+# Adaptive parameter bounds with minimal intervention
+tau1 = min(tau1_raw, 2.8)   # Cap at 2.8 (ensures hub availability)
+tau2 = min(tau2_raw, 2.0)   # Cap at 2.0 (LFR stability requirement)
+
+# Adaptive mu boost for high ρ targets
+if target_rho > 1.5:
+    mu_min = 0.20 + 0.05 * (target_rho - 1.5)  # Proportional boost
+    mu_min = min(mu_min, 0.35)  # Cap to preserve community structure
+    mu = max(mu_raw, mu_min)
+```
+
+**Principles:**
+1. **Preserve when possible** - Use raw params if they work
+2. **Bound when necessary** - Apply minimal changes for feasibility
+3. **Log all changes** - Full transparency for paper
+4. **Justify scientifically** - Each bound has empirical reason
+
+**Results after fix:**
+
+| Network | Before Fix | After Fix |
+|---------|------------|-----------|
+| ca-CondMat success rate | 20% | **100%** |
+| ca-CondMat achievable ρ | 0.88 | **2.39** (target: 2.48) |
+| wiki-Vote tau1 | 2.93 (fails) | 2.80 (works) |
+
+**New CSV columns for transparency:**
+- `tau1_raw`, `tau1_used` - Original vs adjusted tau1
+- `tau2_raw`, `tau2_used` - Original vs adjusted tau2
+- `mu_raw`, `mu_used` - Original vs adjusted mu
+- `param_adjustments` - Summary of what was changed (e.g., "tau2; mu")
+
+**Fallback mechanism:** If adjusted params still fail, falls back to canonical
+parameters (tau1=2.5, tau2=1.5) with full logging.
+
 ---
 
 ## Theoretical Background
@@ -161,8 +205,8 @@ could produce 30,000% relative error and completely dominate the distance, even 
 
 | File | Description |
 |------|-------------|
-| `src/validation/realism.py` | `experiment_5_real_network_matching()`, `experiment_5_extended()` |
-| `src/generators/calibration.py` | `fit_h_to_real_network()`, `fit_h_to_real_network_extended()` |
+| `src/validation/realism.py` | `experiment_5_real_network_matching()`, `experiment_5_extended()`, CSV export with param adjustments |
+| `src/generators/calibration.py` | `fit_h_to_real_network()`, `fit_h_to_real_network_extended()`, `extract_lfr_params_robust()`, `extract_lfr_params_with_fallback()` |
 | `src/data/network_loader.py` | `load_real_networks_from_snap()`, `load_networks_for_experiment_5()` |
 | `src/metrics/hub_bridging.py` | Hub-bridging ratio computation |
 | `src/visualization/plots.py` | `plot_experiment_5_results()` |
@@ -223,6 +267,9 @@ python experiments/run_realism_validation.py --exp5 --quick
 
 # Specify data directory
 python experiments/run_realism_validation.py --exp5 --data-dir /path/to/networks
+
+# Override max nodes filter (for large networks like com-amazon with 335K nodes)
+python experiments/run_realism_validation.py --exp5 --extended --networks com-amazon --max-nodes 400000
 
 # Use sample networks (karate club) for testing
 python experiments/run_realism_validation.py --exp5 --use-sample
@@ -340,22 +387,29 @@ The experiment uses a **smart 3-phase calibration** to efficiently find the opti
 - **FAST MODE**: Reduced iterations (500 vs 5000) when target not achievable
 - **~10x faster** than grid search overall
 
-### Essential Parameters Only
+### Essential Parameters Only (with Robust Extraction)
 
-LFR parameter extraction now returns **only essential parameters**:
+LFR parameter extraction now returns **only essential parameters** with **adaptive bounds**:
 
 ```python
+# extract_lfr_params_robust() returns:
 params = {
     'n': n,           # Network size
-    'tau1': tau1,     # Degree distribution exponent
-    'tau2': tau2,     # Community size distribution exponent
-    'mu': mu,         # Mixing parameter
+    'tau1': tau1,     # Degree exponent (capped at 2.8 for hub availability)
+    'tau2': tau2,     # Community exponent (capped at 2.0 for LFR stability)
+    'mu': mu,         # Mixing parameter (boosted for high ρ targets)
+    # Raw values also stored: tau1_raw, tau2_raw, mu_raw
+    # Adjustments logged: adjustments dict
 }
 # We intentionally EXCLUDE: average_degree, min_community, max_community
 ```
 
-**Why?** Over-constraining parameters (like exact average_degree) severely limits
+**Why essential only?** Over-constraining parameters (like exact average_degree) severely limits
 the rewiring algorithm's ability to achieve target ρ values:
+
+**Why adaptive bounds?** Some real networks have extreme parameters that cause LFR to fail:
+- tau2 > 2.5 → LFR can't generate valid community size distribution
+- tau1 > 2.9 → Too few hubs, very narrow achievable ρ range
 
 | Configuration | Achievable ρ Range | Span |
 |--------------|-------------------|------|
